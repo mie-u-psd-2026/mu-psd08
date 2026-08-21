@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sample Application</title>
+    <!-- Vue.jsをCDNから読み込み -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- BootStrapをCDNから読み込み -->
+	<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css">
+</head>
+<body>
+
+    <div id="app" class="container">
+        <h2 class="mb-4">サンプルアプリ</h2>
+
+        <div class="mb-3">
+            <label for="inputText" class="form-label">テキストを入力してください:</label>
+            <textarea id="inputText" class="form-control" rows="5" v-model="inputText" placeholder="ここにテキストを入力..."></textarea>
+        </div>
+
+        <div class="mb-3">
+            <button @click="execute" class="btn btn-primary">実行</button>
+            <button @click="execute_kansai" class="btn btn-success ms-2">関西弁で実行</button>
+        </div>
+        
+        <h3>結果:</h3>
+        <div class="result-area p-3 border rounded" :class="{ 'alert alert-info': resultText && !resultText.startsWith('エラー:'), 'alert alert-danger': resultText.startsWith('エラー:') }">
+            <pre style="white-space: pre-wrap;">{{ resultText }}</pre>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    inputText: '',
+                    resultText: 'ここに結果が表示されます。'
+                };
+            },
+            methods: {
+                async sendRequest(context = null) {
+                    this.resultText = '処理中...';
+                    try {
+                        const payload = { text: this.inputText };
+                        if (context) {
+                            payload.context = context;
+                        }
+
+                        const response = await fetch('/send_api', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(payload)
+                        });
+                        const data = await response.json();
+                        if (response.ok) {
+                            this.resultText = data.processed_text;
+                        } else {
+                            this.resultText = `エラー: ${data.error || '不明なエラーが発生しました。'}`;
+                        }
+                    } catch (error) {
+                        this.resultText = `エラー: ${error.message}`;
+                    }
+                },
+                execute() {
+                    this.sendRequest();
+                },
+                execute_kansai() {
+                    this.sendRequest("あなたは親切な関西人です。ユーザーからの入力に対して、必ず関西弁で、親しみやすく、そして140字以内で回答してください。");
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
