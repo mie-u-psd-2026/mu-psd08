@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from threading import Lock
 from uuid import uuid4
 
@@ -24,7 +25,11 @@ OLLAMA_BASE_URL = "http://localhost:11434/v1"
 # サーバーを終了すると内容は消える。
 question_sets = {}
 submissions = {}
+time_attacks = {}
 store_lock = Lock()
+
+TIME_ATTACK_SET_COUNT = 5
+TIME_ATTACK_TIME_LIMIT_SECONDS = 600
 
 
 @app.route("/")
@@ -136,13 +141,33 @@ def validate_generated_question_set(data):
         "questions": normalized_questions,
     }
 
+LEVEL_INSTRUCTIONS = {
+    "beginner": (
+        "Use common everyday and business vocabulary. "
+        "Use short and simple sentences. "
+        "Create direct questions whose answers are explicitly stated in the passage."
+    ),
+    "intermediate": (
+        "Use moderately varied business vocabulary. "
+        "Include some complex sentences. "
+        "Create a mixture of detail and purpose questions."
+    ),
+    "advanced": (
+        "Use advanced business vocabulary and complex sentence structures. "
+        "Include implicit relationships. "
+        "Create at least one inference question."
+    ),
+}
 
 def create_prompt(level, document_format):
+    difficulty_instruction = LEVEL_INSTRUCTIONS[level]
+
     return f"""
 Create one original English reading comprehension exercise.
 
 Requirements:
 - Difficulty: {level}
+- Difficulty guideline: {difficulty_instruction}
 - Format: business {document_format}
 - Passage length: 120 to 160 English words
 - Create exactly 2 questions
@@ -177,6 +202,62 @@ Required JSON structure:
 """
 
 
+def generate_question_set_with_llm(level, document_format):
+    """LLMで1つの英文と2問を生成し、検証済みデータを返す。"""
+    client, model = get_llm_client()
+    completion = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": "You create accurate English exercises and return only valid JSON.",
+            },
+            {"role": "user", "content": create_prompt(level, document_format)},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.4,
+    )
+    generated = extract_json(completion.choices[0].message.content)
+    return validate_generated_question_set(generated)
+
+
+def public_question_set(question_set):
+    """正解・根拠・解説を除いた、画面表示用の問題セットを返す。"""
+    return {
+        "question_set_id": question_set["question_set_id"],
+        "level": question_set["level"],
+        "format": question_set["format"],
+        "passage": question_set["passage"],
+        "questions": [
+            {
+                "question_id": item["question_id"],
+                "question": item["question"],
+                "choices": item["choices"],
+            }
+            for item in question_set["questions"]
+        ],
+    }
+
+
+def llm_error_response(error):
+    """問題生成時の例外を共通のHTTPエラーへ変換する。"""
+    if isinstance(error, (json.JSONDecodeError, ValueError)):
+        app.logger.warning("LLM output validation failed: %s", error)
+        return problem(502, "LLM Failure", "AIが正しい形式の問題を生成できませんでした。もう一度お試しください。")
+    if isinstance(error, openai.APITimeoutError):
+        app.logger.exception("LLM API timed out (provider=%s)", LLM_PROVIDER)
+        return problem(504, "LLM Timeout", "問題の生成に時間がかかっています。もう一度お試しください。")
+    if isinstance(error, (openai.APIConnectionError, openai.APIStatusError)):
+        app.logger.exception("LLM API failed (provider=%s): %s", LLM_PROVIDER, error)
+        return problem(502, "LLM Failure", "AIサービスとの通信に失敗しました。もう一度お試しください。")
+    if isinstance(error, RuntimeError):
+        app.logger.error("Configuration error: %s", error)
+        return problem(500, "Internal Server Error", "サーバーの設定が完了していません。")
+
+    app.logger.exception("Unexpected question generation error")
+    return problem(500, "Internal Server Error", "予期しないエラーが発生しました。")
+
+
 @app.route("/api/v1/question-sets", methods=["POST"])
 def create_question_set():
     if not request.is_json:
@@ -192,45 +273,17 @@ def create_question_set():
     document_format = data.get("format")
     invalid_params = []
 
-    if level not in {"beginner", "intermediate"}:
-        invalid_params.append({"name": "level", "reason": "beginnerまたはintermediateを指定してください。"})
+    if level not in {"beginner", "intermediate", "advanced"}:
+        invalid_params.append({"name": "level", "reason": "beginner、intermediateまたはadvancedを指定してください。"})
     if document_format != "email":
         invalid_params.append({"name": "format", "reason": "MVPではemailのみ指定できます。"})
     if invalid_params:
         return problem(422, "Validation Error", "入力値が仕様を満たしていません。", invalid_params)
 
     try:
-        client, model = get_llm_client()
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You create accurate English exercises and return only valid JSON.",
-                },
-                {"role": "user", "content": create_prompt(level, document_format)},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.4,
-        )
-        generated = extract_json(completion.choices[0].message.content)
-        validated = validate_generated_question_set(generated)
-
-    except (json.JSONDecodeError, ValueError) as error:
-        app.logger.warning("LLM output validation failed: %s", error)
-        return problem(502, "LLM Failure", "AIが正しい形式の問題を生成できませんでした。もう一度お試しください。")
-    except openai.APITimeoutError:
-        app.logger.exception("LLM API timed out (provider=%s)", LLM_PROVIDER)
-        return problem(504, "LLM Timeout", "問題の生成に時間がかかっています。もう一度お試しください。")
-    except (openai.APIConnectionError, openai.APIStatusError) as error:
-        app.logger.exception("LLM API failed (provider=%s): %s", LLM_PROVIDER, error)
-        return problem(502, "LLM Failure", "AIサービスとの通信に失敗しました。もう一度お試しください。")
-    except RuntimeError as error:
-        app.logger.error("Configuration error: %s", error)
-        return problem(500, "Internal Server Error", "サーバーの設定が完了していません。")
-    except Exception:
-        app.logger.exception("Unexpected question generation error")
-        return problem(500, "Internal Server Error", "予期しないエラーが発生しました。")
+        validated = generate_question_set_with_llm(level, document_format)
+    except Exception as error:
+        return llm_error_response(error)
 
     question_set_id = str(uuid4())
     stored_question_set = {
@@ -243,22 +296,7 @@ def create_question_set():
     with store_lock:
         question_sets[question_set_id] = stored_question_set
 
-    public_question_set = {
-        "question_set_id": question_set_id,
-        "level": level,
-        "format": document_format,
-        "passage": validated["passage"],
-        "questions": [
-            {
-                "question_id": item["question_id"],
-                "question": item["question"],
-                "choices": item["choices"],
-            }
-            for item in validated["questions"]
-        ],
-    }
-
-    response = jsonify(public_question_set)
+    response = jsonify(public_question_set(stored_question_set))
     response.status_code = 201
     response.headers["Location"] = f"/api/v1/question-sets/{question_set_id}"
     return response
@@ -337,6 +375,242 @@ def create_submission(question_set_id):
         submissions[submission_id] = submission
 
     return jsonify(submission), 201
+
+
+def validate_time_attack_answers(question_set, answers, allow_unanswered=False):
+    """タイムアタックの現在セットに対する回答を検証する。"""
+    if not isinstance(answers, list) or len(answers) > 2:
+        raise ValueError("回答数は0件から2件で指定してください。")
+    if not allow_unanswered and len(answers) != 2:
+        raise ValueError("2問分の回答を送信してください。")
+
+    answer_map = {}
+    expected_ids = {item["question_id"] for item in question_set["questions"]}
+    for answer in answers:
+        if not isinstance(answer, dict) or set(answer) != {"question_id", "selected_choice"}:
+            raise ValueError("回答項目が仕様と一致しません。")
+        question_id = answer.get("question_id")
+        selected_choice = answer.get("selected_choice")
+        if question_id not in expected_ids or question_id in answer_map:
+            raise ValueError("設問IDが不正または重複しています。")
+        if selected_choice is not None and (
+            isinstance(selected_choice, bool)
+            or not isinstance(selected_choice, int)
+            or not 0 <= selected_choice <= 3
+        ):
+            raise ValueError("selected_choiceは0から3またはnullで指定してください。")
+        if selected_choice is None and not allow_unanswered:
+            raise ValueError("次へ進むには2問すべてに回答してください。")
+        answer_map[question_id] = selected_choice
+
+    if not allow_unanswered and set(answer_map) != expected_ids:
+        raise ValueError("2問すべてに回答してください。")
+    return answer_map
+
+
+def time_attack_result(time_attack, timed_out):
+    """未回答を不正解として、タイムアタック全10問を採点する。"""
+    results = []
+    score = 0
+    answer_maps = time_attack["answers"]
+
+    for set_index, question_set in enumerate(time_attack["question_sets"]):
+        answer_map = answer_maps.get(question_set["question_set_id"], {})
+        for item in question_set["questions"]:
+            selected_choice = answer_map.get(item["question_id"])
+            correct = selected_choice == item["correct_choice"]
+            if correct:
+                score += 1
+            results.append(
+                {
+                    "set_number": set_index + 1,
+                    "question_set_id": question_set["question_set_id"],
+                    "passage": question_set["passage"],
+                    "question_id": item["question_id"],
+                    "question": item["question"],
+                    "choices": item["choices"],
+                    "selected_choice": selected_choice,
+                    "correct": correct,
+                    "correct_choice": item["correct_choice"],
+                    "evidence": item["evidence"],
+                    "explanation": item["explanation"],
+                }
+            )
+
+    result = {
+        "time_attack_id": time_attack["time_attack_id"],
+        "score": score,
+        "total": TIME_ATTACK_SET_COUNT * 2,
+        "timed_out": timed_out,
+        "elapsed_seconds": min(
+            int(time.monotonic() - time_attack["started_at"]),
+            TIME_ATTACK_TIME_LIMIT_SECONDS,
+        ),
+        "results": results,
+    }
+    time_attack["finished"] = True
+    time_attack["result"] = result
+    return result
+
+
+@app.route("/api/v1/time-attacks", methods=["POST"])
+def create_time_attack():
+    """中級2問の問題セットを5つ生成し、最初のセットだけを返す。"""
+    if not request.is_json:
+        return problem(400, "Bad Request", "Content-Typeをapplication/jsonにしてください。")
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return problem(400, "Bad Request", "正しいJSONを送信してください。")
+    if set(data) - {"level", "format"}:
+        return problem(422, "Validation Error", "許可されていない項目が含まれています。")
+    if data.get("level") != "intermediate" or data.get("format") != "email":
+        return problem(422, "Validation Error", "タイムアタックは中級・email形式のみ利用できます。")
+
+    generated_sets = []
+    try:
+        for _ in range(TIME_ATTACK_SET_COUNT):
+            validated = generate_question_set_with_llm("intermediate", "email")
+            question_set_id = str(uuid4())
+            generated_sets.append(
+                {
+                    "question_set_id": question_set_id,
+                    "level": "intermediate",
+                    "format": "email",
+                    **validated,
+                }
+            )
+    except Exception as error:
+        return llm_error_response(error)
+
+    time_attack_id = str(uuid4())
+    time_attack = {
+        "time_attack_id": time_attack_id,
+        "question_sets": generated_sets,
+        "current_set_index": 0,
+        "answers": {},
+        "started_at": time.monotonic(),
+        "finished": False,
+        "result": None,
+    }
+    with store_lock:
+        time_attacks[time_attack_id] = time_attack
+
+    return jsonify(
+        {
+            "time_attack_id": time_attack_id,
+            "current_set": 1,
+            "total_sets": TIME_ATTACK_SET_COUNT,
+            "total_questions": TIME_ATTACK_SET_COUNT * 2,
+            "time_limit_seconds": TIME_ATTACK_TIME_LIMIT_SECONDS,
+            "question_set": public_question_set(generated_sets[0]),
+        }
+    ), 201
+
+
+@app.route("/api/v1/time-attacks/<time_attack_id>/answers", methods=["POST"])
+def submit_time_attack_answers(time_attack_id):
+    """現在セットの回答を保存し、次のセットまたは最終結果を返す。"""
+    if not request.is_json:
+        return problem(400, "Bad Request", "Content-Typeをapplication/jsonにしてください。")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != {"question_set_id", "answers"}:
+        return problem(422, "Validation Error", "question_set_idとanswersを送信してください。")
+
+    with store_lock:
+        time_attack = time_attacks.get(time_attack_id)
+    if not time_attack:
+        return problem(404, "Not Found", "指定されたタイムアタックが存在しません。")
+    if time_attack["finished"]:
+        return problem(409, "Conflict", "このタイムアタックはすでに終了しています。")
+
+    if time.monotonic() - time_attack["started_at"] >= TIME_ATTACK_TIME_LIMIT_SECONDS:
+        with store_lock:
+            result = time_attack_result(time_attack, timed_out=True)
+        return jsonify({"finished": True, "result": result}), 200
+
+    current_index = time_attack["current_set_index"]
+    question_set_id = data.get("question_set_id")
+    submitted_index = next(
+        (
+            index
+            for index, item in enumerate(time_attack["question_sets"])
+            if item["question_set_id"] == question_set_id
+        ),
+        None,
+    )
+    if submitted_index is None or submitted_index > current_index:
+        return problem(409, "Conflict", "まだ表示されていない問題セットには回答できません。")
+    current_question_set = time_attack["question_sets"][submitted_index]
+
+    try:
+        answer_map = validate_time_attack_answers(current_question_set, data.get("answers"))
+    except ValueError as error:
+        return problem(422, "Validation Error", str(error))
+
+    with store_lock:
+        time_attack["answers"][current_question_set["question_set_id"]] = answer_map
+        if submitted_index < current_index:
+            return jsonify({"finished": False, "updated": True}), 200
+        time_attack["current_set_index"] += 1
+        if time_attack["current_set_index"] == TIME_ATTACK_SET_COUNT:
+            result = time_attack_result(time_attack, timed_out=False)
+            return jsonify({"finished": True, "result": result}), 200
+        next_index = time_attack["current_set_index"]
+        next_question_set = time_attack["question_sets"][next_index]
+
+    return jsonify(
+        {
+            "finished": False,
+            "current_set": next_index + 1,
+            "total_sets": TIME_ATTACK_SET_COUNT,
+            "question_set": public_question_set(next_question_set),
+        }
+    ), 200
+
+
+@app.route("/api/v1/time-attacks/<time_attack_id>/finish", methods=["POST"])
+def finish_time_attack(time_attack_id):
+    """時間切れ時の回答途中データを保存し、全10問を採点する。"""
+    if not request.is_json:
+        return problem(400, "Bad Request", "Content-Typeをapplication/jsonにしてください。")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != {"answer_sets"}:
+        return problem(422, "Validation Error", "回答データの形式が不正です。")
+
+    with store_lock:
+        time_attack = time_attacks.get(time_attack_id)
+    if not time_attack:
+        return problem(404, "Not Found", "指定されたタイムアタックが存在しません。")
+    if time_attack["finished"]:
+        return jsonify(time_attack["result"]), 200
+
+    answer_sets = data.get("answer_sets")
+    if not isinstance(answer_sets, list):
+        return problem(422, "Validation Error", "answer_setsは配列で指定してください。")
+
+    validated_answer_sets = {}
+    revealed_sets = time_attack["question_sets"][: time_attack["current_set_index"] + 1]
+    revealed_map = {item["question_set_id"]: item for item in revealed_sets}
+    try:
+        for answer_set in answer_sets:
+            if not isinstance(answer_set, dict) or set(answer_set) != {"question_set_id", "answers"}:
+                raise ValueError("各回答セットにはquestion_set_idとanswersが必要です。")
+            question_set_id = answer_set.get("question_set_id")
+            if question_set_id not in revealed_map or question_set_id in validated_answer_sets:
+                raise ValueError("問題セットIDが不正または重複しています。")
+            validated_answer_sets[question_set_id] = validate_time_attack_answers(
+                revealed_map[question_set_id],
+                answer_set.get("answers", []),
+                allow_unanswered=True,
+            )
+    except ValueError as error:
+        return problem(422, "Validation Error", str(error))
+
+    with store_lock:
+        time_attack["answers"].update(validated_answer_sets)
+        result = time_attack_result(time_attack, timed_out=True)
+    return jsonify(result), 200
 
 
 if __name__ == "__main__":
