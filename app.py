@@ -123,6 +123,8 @@ def validate_generated_question_set(data):
             raise ValueError("正解番号が0から3の範囲ではありません")
         if not isinstance(evidence, str) or not evidence.strip():
             raise ValueError("正解の根拠がありません")
+        if evidence.strip() not in passage:
+            raise ValueError(f"設問{index}の根拠が本文に含まれていません")
         if not isinstance(explanation, str) or not explanation.strip():
             raise ValueError("日本語解説がありません")
 
