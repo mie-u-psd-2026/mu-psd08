@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import time
 from threading import Lock
@@ -595,6 +596,7 @@ def time_attack_result(time_attack, timed_out):
                 {
                     "set_number": set_index + 1,
                     "question_set_id": question_set["question_set_id"],
+                    "format": question_set["format"],
                     "passage": question_set["passage"],
                     "passage_translation": question_set["passage_translation"],
                     "question_id": item["question_id"],
@@ -626,7 +628,7 @@ def time_attack_result(time_attack, timed_out):
 
 @app.route("/api/v1/time-attacks", methods=["POST"])
 def create_time_attack():
-    """中級2問の問題セットを5つ生成し、最初のセットだけを返す。"""
+    """中級2問の問題セットを5つ、複数の文章形式で生成する。"""
     if not request.is_json:
         return problem(400, "Bad Request", "Content-Typeをapplication/jsonにしてください。")
 
@@ -635,19 +637,25 @@ def create_time_attack():
         return problem(400, "Bad Request", "正しいJSONを送信してください。")
     if set(data) - {"level", "format"}:
         return problem(422, "Validation Error", "許可されていない項目が含まれています。")
-    if data.get("level") != "intermediate" or data.get("format") != "email":
-        return problem(422, "Validation Error", "タイムアタックは中級・email形式のみ利用できます。")
+    if data.get("level") != "intermediate":
+        return problem(422, "Validation Error", "タイムアタックは中級のみ利用できます。")
+
+    # 4形式を一度ずつ含め、5セット目だけをランダムに追加することで
+    # 完全な無作為抽出よりも形式の偏りを抑える。
+    time_attack_formats = list(FORMAT_INSTRUCTIONS)
+    random.shuffle(time_attack_formats)
+    time_attack_formats.append(random.choice(list(FORMAT_INSTRUCTIONS)))
 
     generated_sets = []
     try:
-        for _ in range(TIME_ATTACK_SET_COUNT):
-            validated = generate_question_set_with_llm("intermediate", "email")
+        for document_format in time_attack_formats:
+            validated = generate_question_set_with_llm("intermediate", document_format)
             question_set_id = str(uuid4())
             generated_sets.append(
                 {
                     "question_set_id": question_set_id,
                     "level": "intermediate",
-                    "format": "email",
+                    "format": document_format,
                     **validated,
                 }
             )
