@@ -26,6 +26,7 @@ OLLAMA_BASE_URL = "http://localhost:11434/v1"
 question_sets = {}
 submissions = {}
 time_attacks = {}
+detailed_explanations = {}
 store_lock = Lock()
 
 TIME_ATTACK_SET_COUNT = 5
@@ -392,6 +393,137 @@ def create_submission(question_set_id):
         submissions[submission_id] = submission
 
     return jsonify(submission), 201
+
+
+def find_explanation_target(question_set_id):
+    """詳細説明対象と、1回制限に使うキー、採点済みかを返す。"""
+    question_set = question_sets.get(question_set_id)
+    if question_set:
+        graded = any(
+            item["question_set_id"] == question_set_id
+            for item in submissions.values()
+        )
+        return question_set, f"question_set:{question_set_id}", graded
+
+    for time_attack_id, time_attack in time_attacks.items():
+        question_set = next(
+            (
+                item
+                for item in time_attack["question_sets"]
+                if item["question_set_id"] == question_set_id
+            ),
+            None,
+        )
+        if question_set:
+            # タイムアタックは5セット全体で詳細説明を1回だけ利用できる。
+            return question_set, f"time_attack:{time_attack_id}", time_attack["finished"]
+
+    return None, None, False
+
+
+def create_detailed_explanation_prompt(passage, selected_text):
+    return f"""
+You are an English teacher helping a Japanese learner.
+
+Full passage:
+{passage}
+
+Selected sentence:
+{selected_text}
+
+Explain only the selected sentence in clear Japanese. Include:
+1. A natural Japanese translation
+2. The sentence's grammatical structure
+3. Important words, phrases, and expressions
+
+Keep the explanation concise and useful for learning. Return plain Japanese text only.
+"""
+
+
+@app.route("/api/v1/question-sets/<question_set_id>/explanations", methods=["POST"])
+def create_detailed_explanation(question_set_id):
+    """採点後、本文から選択した1文をAIが日本語で詳しく説明する。"""
+    if not request.is_json:
+        return problem(400, "Bad Request", "Content-Typeをapplication/jsonにしてください。")
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return problem(400, "Bad Request", "正しいJSONを送信してください。")
+    if set(data) != {"selected_text"}:
+        return problem(422, "Validation Error", "selected_textだけを送信してください。")
+
+    selected_text = data.get("selected_text")
+    if not isinstance(selected_text, str) or not selected_text.strip():
+        return problem(422, "Validation Error", "説明する英文を選択してください。")
+    selected_text = selected_text.strip()
+    if len(selected_text) > 500:
+        return problem(422, "Validation Error", "選択できる英文は500文字以内です。")
+
+    with store_lock:
+        question_set, usage_key, graded = find_explanation_target(question_set_id)
+        if not question_set:
+            return problem(404, "Not Found", "指定された問題セットが存在しません。")
+        if not graded:
+            return problem(409, "Conflict", "詳細説明は採点後に利用できます。")
+        if selected_text not in question_set["passage"]:
+            return problem(422, "Validation Error", "本文に含まれる英文を選択してください。")
+        if usage_key in detailed_explanations:
+            return problem(409, "Conflict", "詳細説明は1度だけ利用できます。")
+
+        # 同時クリックによる複数回送信を防ぐため、LLM通信前に利用中として確保する。
+        detailed_explanations[usage_key] = {"status": "processing"}
+
+    try:
+        client, model = get_llm_client()
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You explain English grammar and phrases accurately in Japanese.",
+                },
+                {
+                    "role": "user",
+                    "content": create_detailed_explanation_prompt(
+                        question_set["passage"], selected_text
+                    ),
+                },
+            ],
+            temperature=0.2,
+        )
+        explanation_text = (completion.choices[0].message.content or "").strip()
+        if not explanation_text:
+            raise ValueError("詳細説明が空です")
+    except Exception as error:
+        # 生成に失敗した場合は「1回」を消費せず、再試行を許可する。
+        with store_lock:
+            if detailed_explanations.get(usage_key, {}).get("status") == "processing":
+                detailed_explanations.pop(usage_key, None)
+
+        if isinstance(error, openai.APITimeoutError):
+            app.logger.exception("Detailed explanation timed out")
+            return problem(504, "LLM Timeout", "詳細説明の生成に時間がかかっています。もう一度お試しください。")
+        if isinstance(error, (openai.APIConnectionError, openai.APIStatusError)):
+            app.logger.exception("Detailed explanation API failed: %s", error)
+            return problem(502, "LLM Failure", "AIサービスとの通信に失敗しました。もう一度お試しください。")
+        if isinstance(error, RuntimeError):
+            app.logger.error("Configuration error: %s", error)
+            return problem(500, "Internal Server Error", "サーバーの設定が完了していません。")
+
+        app.logger.exception("Detailed explanation generation failed")
+        return problem(502, "LLM Failure", "詳細説明を生成できませんでした。もう一度お試しください。")
+
+    result = {
+        "explanation_id": str(uuid4()),
+        "question_set_id": question_set_id,
+        "selected_text": selected_text,
+        "explanation": explanation_text,
+        "remaining_uses": 0,
+    }
+    with store_lock:
+        detailed_explanations[usage_key] = {"status": "completed", **result}
+
+    return jsonify(result), 201
 
 
 def validate_time_attack_answers(question_set, answers, allow_unanswered=False):
