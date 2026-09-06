@@ -167,8 +167,16 @@ LEVEL_INSTRUCTIONS = {
     ),
 }
 
+FORMAT_INSTRUCTIONS = {
+    "email": "Write a realistic business email with a subject, greeting, body, and closing.",
+    "notice": "Write a concise public or workplace notice with a clear purpose and practical details.",
+    "advertisement": "Write a realistic advertisement describing a product, service, event, or offer.",
+    "article": "Write a short informational article with a title and logically organized paragraphs.",
+}
+
 def create_prompt(level, document_format):
     difficulty_instruction = LEVEL_INSTRUCTIONS[level]
+    format_instruction = FORMAT_INSTRUCTIONS[document_format]
 
     return f"""
 Create one original English reading comprehension exercise.
@@ -176,7 +184,8 @@ Create one original English reading comprehension exercise.
 Requirements:
 - Difficulty: {level}
 - Difficulty guideline: {difficulty_instruction}
-- Format: business {document_format}
+- Format: {document_format}
+- Format guideline: {format_instruction}
 - Passage length: 120 to 160 English words
 - passage_translation must be a natural Japanese translation of the entire passage
 - Create exactly 2 questions
@@ -299,8 +308,13 @@ def create_question_set():
 
     if level not in {"beginner", "intermediate", "advanced"}:
         invalid_params.append({"name": "level", "reason": "beginner、intermediateまたはadvancedを指定してください。"})
-    if document_format != "email":
-        invalid_params.append({"name": "format", "reason": "MVPではemailのみ指定できます。"})
+    if document_format not in FORMAT_INSTRUCTIONS:
+        invalid_params.append(
+            {
+                "name": "format",
+                "reason": "email、notice、advertisementまたはarticleを指定してください。",
+            }
+        )
     if invalid_params:
         return problem(422, "Validation Error", "入力値が仕様を満たしていません。", invalid_params)
 
