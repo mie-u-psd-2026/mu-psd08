@@ -30,6 +30,7 @@ store_lock = Lock()
 
 TIME_ATTACK_SET_COUNT = 5
 TIME_ATTACK_TIME_LIMIT_SECONDS = 600
+GENERATION_MAX_ATTEMPTS = 2
 
 
 @app.route("/")
@@ -203,22 +204,36 @@ Required JSON structure:
 
 
 def generate_question_set_with_llm(level, document_format):
-    """LLMで1つの英文と2問を生成し、検証済みデータを返す。"""
+    """LLMで1つの英文と2問を生成し、形式不正時は再生成する。"""
     client, model = get_llm_client()
-    completion = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You create accurate English exercises and return only valid JSON.",
-            },
-            {"role": "user", "content": create_prompt(level, document_format)},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.4,
-    )
-    generated = extract_json(completion.choices[0].message.content)
-    return validate_generated_question_set(generated)
+    last_error = None
+
+    for attempt in range(1, GENERATION_MAX_ATTEMPTS + 1):
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You create accurate English exercises and return only valid JSON.",
+                    },
+                    {"role": "user", "content": create_prompt(level, document_format)},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.4,
+            )
+            generated = extract_json(completion.choices[0].message.content)
+            return validate_generated_question_set(generated)
+        except (json.JSONDecodeError, ValueError) as error:
+            last_error = error
+            app.logger.warning(
+                "LLM output validation failed on attempt %s/%s: %s",
+                attempt,
+                GENERATION_MAX_ATTEMPTS,
+                error,
+            )
+
+    raise last_error
 
 
 def public_question_set(question_set):
