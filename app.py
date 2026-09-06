@@ -95,9 +95,12 @@ def validate_generated_question_set(data):
         raise ValueError("生成結果がJSONオブジェクトではありません")
 
     passage = data.get("passage")
+    passage_translation = data.get("passage_translation")
     questions = data.get("questions")
     if not isinstance(passage, str) or not passage.strip():
         raise ValueError("英文がありません")
+    if not isinstance(passage_translation, str) or not passage_translation.strip():
+        raise ValueError("英文の日本語訳がありません")
     if not isinstance(questions, list) or len(questions) != 2:
         raise ValueError("設問数が2問ではありません")
 
@@ -142,6 +145,7 @@ def validate_generated_question_set(data):
 
     return {
         "passage": passage.strip(),
+        "passage_translation": passage_translation.strip(),
         "questions": normalized_questions,
     }
 
@@ -174,6 +178,7 @@ Requirements:
 - Difficulty guideline: {difficulty_instruction}
 - Format: business {document_format}
 - Passage length: 120 to 160 English words
+- passage_translation must be a natural Japanese translation of the entire passage
 - Create exactly 2 questions
 - Each question must have exactly 4 unique choices
 - correct_choice must be an integer from 0 to 3
@@ -186,6 +191,7 @@ Requirements:
 Required JSON structure:
 {{
   "passage": "English passage",
+  "passage_translation": "Japanese translation of the entire passage",
   "questions": [
     {{
       "question": "English question",
@@ -387,6 +393,7 @@ def create_submission(question_set_id):
         "question_set_id": question_set_id,
         "score": score,
         "total": 2,
+        "passage_translation": question_set["passage_translation"],
         "results": results,
     }
     with store_lock:
@@ -575,6 +582,7 @@ def time_attack_result(time_attack, timed_out):
                     "set_number": set_index + 1,
                     "question_set_id": question_set["question_set_id"],
                     "passage": question_set["passage"],
+                    "passage_translation": question_set["passage_translation"],
                     "question_id": item["question_id"],
                     "question": item["question"],
                     "choices": item["choices"],
