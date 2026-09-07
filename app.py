@@ -19,6 +19,7 @@ load_dotenv()
 app = Flask(__name__)
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+DEBUG = os.getenv("FLASK_DEBUG", "false").strip().lower() == "true"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:0.5b")
@@ -36,10 +37,19 @@ rate_limit_lock = Lock()
 
 TIME_ATTACK_SET_COUNT = 5
 TIME_ATTACK_TIME_LIMIT_SECONDS = 600
-GENERATION_MAX_ATTEMPTS = 2
+GENERATION_MAX_ATTEMPTS = 3
 TIME_ATTACK_SET_MAX_ATTEMPTS = 3
 PASSAGE_SIMILARITY_LIMIT = 0.72
 QUESTION_SIMILARITY_LIMIT = 0.86
+PASSAGE_MIN_WORDS = 130
+PASSAGE_MAX_WORDS = 200
+PASSAGE_MAX_CHARS = 1400
+PASSAGE_TRANSLATION_MAX_CHARS = 1500
+QUESTION_MAX_CHARS = 200
+CHOICE_MAX_CHARS = 100
+EVIDENCE_MAX_CHARS = 500
+EXPLANATION_MAX_CHARS = 600
+DETAILED_EXPLANATION_MAX_CHARS = 1500
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = 60
 LLM_RATE_LIMIT_MAX_REQUESTS = 10
@@ -156,6 +166,16 @@ def extract_json(text):
     return json.loads(text)
 
 
+def count_english_words(text):
+    """短縮形やハイフン語を1語として英文の単語数を数える。"""
+    return len(re.findall(r"\b[A-Za-z]+(?:['-][A-Za-z]+)*\b", text))
+
+
+def validate_max_length(value, max_length, field_name):
+    if len(value) > max_length:
+        raise ValueError(f"{field_name}が{max_length}文字を超えています")
+
+
 def validate_generated_question_set(data):
     if not isinstance(data, dict):
         raise ValueError("生成結果がJSONオブジェクトではありません")
@@ -169,6 +189,21 @@ def validate_generated_question_set(data):
         raise ValueError("英文の日本語訳がありません")
     if not isinstance(questions, list) or len(questions) != 2:
         raise ValueError("設問数が2問ではありません")
+
+    passage = passage.strip()
+    passage_translation = passage_translation.strip()
+    word_count = count_english_words(passage)
+    if not PASSAGE_MIN_WORDS <= word_count <= PASSAGE_MAX_WORDS:
+        raise ValueError(
+            f"英文の単語数が範囲外です: {word_count}語"
+            f"（許容範囲{PASSAGE_MIN_WORDS}～{PASSAGE_MAX_WORDS}語）"
+        )
+    validate_max_length(passage, PASSAGE_MAX_CHARS, "英文")
+    validate_max_length(
+        passage_translation,
+        PASSAGE_TRANSLATION_MAX_CHARS,
+        "英文の日本語訳",
+    )
 
     normalized_questions = []
     for index, item in enumerate(questions, start=1):
@@ -198,20 +233,36 @@ def validate_generated_question_set(data):
         if not isinstance(explanation, str) or not explanation.strip():
             raise ValueError("日本語解説がありません")
 
+        question = question.strip()
+        choices = [choice.strip() for choice in choices]
+        evidence = evidence.strip()
+        explanation = explanation.strip()
+        if len(set(choices)) != 4:
+            raise ValueError("空白を除くと選択肢が重複しています")
+        validate_max_length(question, QUESTION_MAX_CHARS, f"設問{index}の設問文")
+        for choice_index, choice in enumerate(choices, start=1):
+            validate_max_length(
+                choice,
+                CHOICE_MAX_CHARS,
+                f"設問{index}の選択肢{choice_index}",
+            )
+        validate_max_length(evidence, EVIDENCE_MAX_CHARS, f"設問{index}の根拠")
+        validate_max_length(explanation, EXPLANATION_MAX_CHARS, f"設問{index}の解説")
+
         normalized_questions.append(
             {
                 "question_id": f"q{index}",
-                "question": question.strip(),
+                "question": question,
                 "choices": choices,
                 "correct_choice": correct_choice,
-                "evidence": evidence.strip(),
-                "explanation": explanation.strip(),
+                "evidence": evidence,
+                "explanation": explanation,
             }
         )
 
     return {
-        "passage": passage.strip(),
-        "passage_translation": passage_translation.strip(),
+        "passage": passage,
+        "passage_translation": passage_translation,
         "questions": normalized_questions,
     }
 
@@ -240,7 +291,12 @@ FORMAT_INSTRUCTIONS = {
     "article": "Write a short informational article with a title and logically organized paragraphs.",
 }
 
-def create_prompt(level, document_format, previous_passages=None):
+def create_prompt(
+    level,
+    document_format,
+    previous_passages=None,
+    validation_feedback=None,
+):
     difficulty_instruction = LEVEL_INSTRUCTIONS[level]
     format_instruction = FORMAT_INSTRUCTIONS[document_format]
     previous_passages = previous_passages or []
@@ -254,6 +310,15 @@ def create_prompt(level, document_format, previous_passages=None):
   from all of these previously generated passages:
 {previous_summaries}
 """
+    retry_instruction = ""
+    if validation_feedback:
+        retry_instruction = f"""
+IMPORTANT CORRECTION:
+- The previous response was rejected for this reason: {validation_feedback}
+- Create a completely corrected response instead of repeating the previous one.
+- The passage field alone must contain 150 to 180 English words.
+- Count the words in the passage before returning the JSON.
+"""
 
     return f"""
 Create one original English reading comprehension exercise.
@@ -263,7 +328,11 @@ Requirements:
 - Difficulty guideline: {difficulty_instruction}
 - Format: {document_format}
 - Format guideline: {format_instruction}
-- Passage length: 120 to 160 English words
+- Passage length: 150 to 180 English words
+- The 150 to 180 word requirement applies to the passage field itself, not to the whole JSON
+- Do not count the questions, choices, translation, or explanation as passage words
+- Develop the passage with realistic context and several concrete details; do not end it early
+- Include enough concrete details to support exactly 2 meaningful questions
 - passage_translation must be a natural Japanese translation of the entire passage
 - Create exactly 2 questions
 - Each question must have exactly 4 unique choices
@@ -273,6 +342,7 @@ Requirements:
 - The correct answer, evidence, and explanation must be consistent
 - Do not reproduce an existing TOEIC question
 {diversity_instruction}
+{retry_instruction}
 - Return only valid JSON without Markdown
 
 Required JSON structure:
@@ -303,6 +373,7 @@ def generate_question_set_with_llm(level, document_format, previous_passages=Non
     """LLMで1つの英文と2問を生成し、形式不正時は再生成する。"""
     client, model = get_llm_client()
     last_error = None
+    validation_feedback = None
 
     for attempt in range(1, GENERATION_MAX_ATTEMPTS + 1):
         try:
@@ -315,7 +386,12 @@ def generate_question_set_with_llm(level, document_format, previous_passages=Non
                     },
                     {
                         "role": "user",
-                        "content": create_prompt(level, document_format, previous_passages),
+                        "content": create_prompt(
+                            level,
+                            document_format,
+                            previous_passages,
+                            validation_feedback,
+                        ),
                     },
                 ],
                 response_format={"type": "json_object"},
@@ -325,6 +401,7 @@ def generate_question_set_with_llm(level, document_format, previous_passages=Non
             return validate_generated_question_set(generated)
         except (json.JSONDecodeError, ValueError) as error:
             last_error = error
+            validation_feedback = str(error)
             app.logger.warning(
                 "LLM output validation failed on attempt %s/%s: %s",
                 attempt,
@@ -680,6 +757,11 @@ def create_detailed_explanation(question_set_id):
         explanation_text = (completion.choices[0].message.content or "").strip()
         if not explanation_text:
             raise ValueError("詳細説明が空です")
+        validate_max_length(
+            explanation_text,
+            DETAILED_EXPLANATION_MAX_CHARS,
+            "詳細説明",
+        )
     except Exception as error:
         # 生成に失敗した場合は「1回」を消費せず、再試行を許可する。
         with store_lock:
@@ -866,36 +948,37 @@ def submit_time_attack_answers(time_attack_id):
 
     with store_lock:
         time_attack = time_attacks.get(time_attack_id)
-    if not time_attack:
-        return problem(404, "Not Found", "指定されたタイムアタックが存在しません。")
-    if time_attack["finished"]:
-        return problem(409, "Conflict", "このタイムアタックはすでに終了しています。")
+        if not time_attack:
+            return problem(404, "Not Found", "指定されたタイムアタックが存在しません。")
+        if time_attack["finished"]:
+            return problem(409, "Conflict", "このタイムアタックはすでに終了しています。")
 
-    if time.monotonic() - time_attack["started_at"] >= TIME_ATTACK_TIME_LIMIT_SECONDS:
-        with store_lock:
+        if time.monotonic() - time_attack["started_at"] >= TIME_ATTACK_TIME_LIMIT_SECONDS:
             result = time_attack_result(time_attack, timed_out=True)
-        return jsonify({"finished": True, "result": result}), 200
+            return jsonify({"finished": True, "result": result}), 200
 
-    current_index = time_attack["current_set_index"]
-    question_set_id = data.get("question_set_id")
-    submitted_index = next(
-        (
-            index
-            for index, item in enumerate(time_attack["question_sets"])
-            if item["question_set_id"] == question_set_id
-        ),
-        None,
-    )
-    if submitted_index is None or submitted_index > current_index:
-        return problem(409, "Conflict", "まだ表示されていない問題セットには回答できません。")
-    current_question_set = time_attack["question_sets"][submitted_index]
+        current_index = time_attack["current_set_index"]
+        question_set_id = data.get("question_set_id")
+        submitted_index = next(
+            (
+                index
+                for index, item in enumerate(time_attack["question_sets"])
+                if item["question_set_id"] == question_set_id
+            ),
+            None,
+        )
+        if submitted_index is None or submitted_index > current_index:
+            return problem(409, "Conflict", "まだ表示されていない問題セットには回答できません。")
+        current_question_set = time_attack["question_sets"][submitted_index]
 
-    try:
-        answer_map = validate_time_attack_answers(current_question_set, data.get("answers"))
-    except ValueError as error:
-        return problem(422, "Validation Error", str(error))
+        try:
+            answer_map = validate_time_attack_answers(
+                current_question_set,
+                data.get("answers"),
+            )
+        except ValueError as error:
+            return problem(422, "Validation Error", str(error))
 
-    with store_lock:
         time_attack["answers"][current_question_set["question_set_id"]] = answer_map
         if submitted_index < current_index:
             return jsonify({"finished": False, "updated": True}), 200
@@ -925,40 +1008,42 @@ def finish_time_attack(time_attack_id):
     if not isinstance(data, dict) or set(data) != {"answer_sets"}:
         return problem(422, "Validation Error", "回答データの形式が不正です。")
 
-    with store_lock:
-        time_attack = time_attacks.get(time_attack_id)
-    if not time_attack:
-        return problem(404, "Not Found", "指定されたタイムアタックが存在しません。")
-    if time_attack["finished"]:
-        return jsonify(time_attack["result"]), 200
-
     answer_sets = data.get("answer_sets")
     if not isinstance(answer_sets, list):
         return problem(422, "Validation Error", "answer_setsは配列で指定してください。")
 
-    validated_answer_sets = {}
-    revealed_sets = time_attack["question_sets"][: time_attack["current_set_index"] + 1]
-    revealed_map = {item["question_set_id"]: item for item in revealed_sets}
-    try:
-        for answer_set in answer_sets:
-            if not isinstance(answer_set, dict) or set(answer_set) != {"question_set_id", "answers"}:
-                raise ValueError("各回答セットにはquestion_set_idとanswersが必要です。")
-            question_set_id = answer_set.get("question_set_id")
-            if question_set_id not in revealed_map or question_set_id in validated_answer_sets:
-                raise ValueError("問題セットIDが不正または重複しています。")
-            validated_answer_sets[question_set_id] = validate_time_attack_answers(
-                revealed_map[question_set_id],
-                answer_set.get("answers", []),
-                allow_unanswered=True,
-            )
-    except ValueError as error:
-        return problem(422, "Validation Error", str(error))
-
     with store_lock:
+        time_attack = time_attacks.get(time_attack_id)
+        if not time_attack:
+            return problem(404, "Not Found", "指定されたタイムアタックが存在しません。")
+        if time_attack["finished"]:
+            return jsonify(time_attack["result"]), 200
+
+        validated_answer_sets = {}
+        revealed_sets = time_attack["question_sets"][: time_attack["current_set_index"] + 1]
+        revealed_map = {item["question_set_id"]: item for item in revealed_sets}
+        try:
+            for answer_set in answer_sets:
+                if not isinstance(answer_set, dict) or set(answer_set) != {
+                    "question_set_id",
+                    "answers",
+                }:
+                    raise ValueError("各回答セットにはquestion_set_idとanswersが必要です。")
+                question_set_id = answer_set.get("question_set_id")
+                if question_set_id not in revealed_map or question_set_id in validated_answer_sets:
+                    raise ValueError("問題セットIDが不正または重複しています。")
+                validated_answer_sets[question_set_id] = validate_time_attack_answers(
+                    revealed_map[question_set_id],
+                    answer_set.get("answers", []),
+                    allow_unanswered=True,
+                )
+        except ValueError as error:
+            return problem(422, "Validation Error", str(error))
+
         time_attack["answers"].update(validated_answer_sets)
         result = time_attack_result(time_attack, timed_out=True)
     return jsonify(result), 200
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=DEBUG, host="0.0.0.0", port=5000)
