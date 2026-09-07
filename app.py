@@ -34,6 +34,8 @@ detailed_explanations = {}
 store_lock = Lock()
 rate_limit_buckets = defaultdict(deque)
 rate_limit_lock = Lock()
+cleanup_lock = Lock()
+last_cleanup_at = 0.0
 
 TIME_ATTACK_SET_COUNT = 5
 TIME_ATTACK_TIME_LIMIT_SECONDS = 600
@@ -41,6 +43,7 @@ GENERATION_MAX_ATTEMPTS = 3
 TIME_ATTACK_SET_MAX_ATTEMPTS = 3
 PASSAGE_SIMILARITY_LIMIT = 0.72
 QUESTION_SIMILARITY_LIMIT = 0.86
+EVIDENCE_SIMILARITY_LIMIT = 0.90
 PASSAGE_MIN_WORDS = 130
 PASSAGE_MAX_WORDS = 200
 PASSAGE_MAX_CHARS = 1400
@@ -53,6 +56,12 @@ DETAILED_EXPLANATION_MAX_CHARS = 1500
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = 60
 LLM_RATE_LIMIT_MAX_REQUESTS = 10
+QUESTION_SET_TTL_SECONDS = 6 * 60 * 60
+SUBMISSION_TTL_SECONDS = 6 * 60 * 60
+TIME_ATTACK_TTL_SECONDS = 2 * 60 * 60
+EXPLANATION_TTL_SECONDS = 6 * 60 * 60
+PROCESSING_EXPLANATION_TTL_SECONDS = 10 * 60
+CLEANUP_INTERVAL_SECONDS = 60
 
 
 @app.route("/")
@@ -101,6 +110,84 @@ def exceeds_rate_limit(client_ip, category, limit, now):
     return False, 0
 
 
+def cleanup_expired_data(now):
+    """DBを使わない一時データを有効期限に基づいて削除する。"""
+    global last_cleanup_at
+
+    # 複数リクエストが同時に掃除を始めないよう、掃除間隔の更新を保護する。
+    with cleanup_lock:
+        if now - last_cleanup_at < CLEANUP_INTERVAL_SECONDS:
+            return
+        last_cleanup_at = now
+
+    with store_lock:
+        expired_question_set_ids = {
+            item_id
+            for item_id, item in question_sets.items()
+            if now - item.get("created_at", 0) >= QUESTION_SET_TTL_SECONDS
+        }
+        for item_id in expired_question_set_ids:
+            question_sets.pop(item_id, None)
+
+        expired_submission_ids = {
+            item_id
+            for item_id, item in submissions.items()
+            if now - item.get("created_at", 0) >= SUBMISSION_TTL_SECONDS
+            or item.get("question_set_id") not in question_sets
+        }
+        for item_id in expired_submission_ids:
+            submissions.pop(item_id, None)
+
+        expired_time_attack_ids = {
+            item_id
+            for item_id, item in time_attacks.items()
+            if now - item.get("created_at", item.get("started_at", 0))
+            >= TIME_ATTACK_TTL_SECONDS
+        }
+        for item_id in expired_time_attack_ids:
+            time_attacks.pop(item_id, None)
+
+        valid_question_set_ids = set(question_sets)
+        for time_attack in time_attacks.values():
+            valid_question_set_ids.update(
+                item["question_set_id"] for item in time_attack["question_sets"]
+            )
+
+        expired_explanation_keys = set()
+        for usage_key, item in detailed_explanations.items():
+            question_set_id = usage_key.removeprefix("question_set:")
+            ttl = (
+                PROCESSING_EXPLANATION_TTL_SECONDS
+                if item.get("status") == "processing"
+                else EXPLANATION_TTL_SECONDS
+            )
+            if (
+                now - item.get("created_at", 0) >= ttl
+                or question_set_id not in valid_question_set_ids
+            ):
+                expired_explanation_keys.add(usage_key)
+        for usage_key in expired_explanation_keys:
+            detailed_explanations.pop(usage_key, None)
+
+    # 使用されなくなったIP別レート制限バケットも破棄する。
+    with rate_limit_lock:
+        cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+        for key, bucket in list(rate_limit_buckets.items()):
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+            if not bucket:
+                rate_limit_buckets.pop(key, None)
+
+    removed_count = (
+        len(expired_question_set_ids)
+        + len(expired_submission_ids)
+        + len(expired_time_attack_ids)
+        + len(expired_explanation_keys)
+    )
+    if removed_count:
+        app.logger.info("Expired in-memory records removed (count=%s)", removed_count)
+
+
 @app.before_request
 def limit_api_requests():
     """画面を経由しない連続API呼び出しもIP単位で制限する。"""
@@ -109,6 +196,7 @@ def limit_api_requests():
 
     client_ip = request.remote_addr or "unknown"
     now = time.monotonic()
+    cleanup_expired_data(now)
     exceeded, retry_after = exceeds_rate_limit(
         client_ip, "all", RATE_LIMIT_MAX_REQUESTS, now
     )
@@ -176,6 +264,21 @@ def validate_max_length(value, max_length, field_name):
         raise ValueError(f"{field_name}が{max_length}文字を超えています")
 
 
+def contains_sufficient_japanese(text):
+    """日本語文字が最低3文字かつ、空白を除く文字の20%以上あるか確認する。"""
+    compact_text = re.sub(r"\s+", "", text)
+    japanese_chars = re.findall(r"[\u3040-\u30ff\u3400-\u9fff]", compact_text)
+    return (
+        len(japanese_chars) >= 3
+        and len(japanese_chars) / max(len(compact_text), 1) >= 0.20
+    )
+
+
+def validate_japanese_text(value, field_name):
+    if not contains_sufficient_japanese(value):
+        raise ValueError(f"{field_name}が日本語で書かれていません")
+
+
 def validate_generated_question_set(data):
     if not isinstance(data, dict):
         raise ValueError("生成結果がJSONオブジェクトではありません")
@@ -204,6 +307,7 @@ def validate_generated_question_set(data):
         PASSAGE_TRANSLATION_MAX_CHARS,
         "英文の日本語訳",
     )
+    validate_japanese_text(passage_translation, "英文の日本語訳")
 
     normalized_questions = []
     for index, item in enumerate(questions, start=1):
@@ -248,6 +352,7 @@ def validate_generated_question_set(data):
             )
         validate_max_length(evidence, EVIDENCE_MAX_CHARS, f"設問{index}の根拠")
         validate_max_length(explanation, EXPLANATION_MAX_CHARS, f"設問{index}の解説")
+        validate_japanese_text(explanation, f"設問{index}の解説")
 
         normalized_questions.append(
             {
@@ -258,6 +363,24 @@ def validate_generated_question_set(data):
                 "evidence": evidence,
                 "explanation": explanation,
             }
+        )
+
+    question_similarity = text_similarity(
+        normalized_questions[0]["question"],
+        normalized_questions[1]["question"],
+    )
+    if question_similarity >= QUESTION_SIMILARITY_LIMIT:
+        raise ValueError(
+            f"2つの設問文が類似しすぎています（類似度{question_similarity:.2f}）"
+        )
+
+    evidence_similarity = text_similarity(
+        normalized_questions[0]["evidence"],
+        normalized_questions[1]["evidence"],
+    )
+    if evidence_similarity >= EVIDENCE_SIMILARITY_LIMIT:
+        raise ValueError(
+            f"2つの根拠が類似しすぎています（類似度{evidence_similarity:.2f}）"
         )
 
     return {
@@ -482,13 +605,13 @@ def generate_distinct_time_attack_set(level, document_format, generated_sets):
             last_error = error
 
         app.logger.warning(
-            "Time attack set generation failed on attempt %s/%s "
-            "(set=%s, format=%s): %s",
+            "Time attack set generation failed "
+            "(attempt=%s/%s, set=%s, format=%s, error_type=%s)",
             attempt,
             TIME_ATTACK_SET_MAX_ATTEMPTS,
             len(generated_sets) + 1,
             document_format,
-            last_error,
+            type(last_error).__name__,
         )
         if attempt < TIME_ATTACK_SET_MAX_ATTEMPTS:
             time.sleep(attempt)
@@ -520,10 +643,15 @@ def llm_error_response(error):
         app.logger.warning("LLM output validation failed: %s", error)
         return problem(502, "LLM Failure", "AIが正しい形式の問題を生成できませんでした。もう一度お試しください。")
     if isinstance(error, openai.APITimeoutError):
-        app.logger.exception("LLM API timed out (provider=%s)", LLM_PROVIDER)
+        app.logger.warning("LLM API timed out (provider=%s)", LLM_PROVIDER)
         return problem(504, "LLM Timeout", "問題の生成に時間がかかっています。もう一度お試しください。")
     if isinstance(error, (openai.APIConnectionError, openai.APIStatusError)):
-        app.logger.exception("LLM API failed (provider=%s): %s", LLM_PROVIDER, error)
+        app.logger.warning(
+            "LLM API failed (provider=%s, error_type=%s, status=%s)",
+            LLM_PROVIDER,
+            type(error).__name__,
+            getattr(error, "status_code", None),
+        )
         return problem(502, "LLM Failure", "AIサービスとの通信に失敗しました。もう一度お試しください。")
     if isinstance(error, RuntimeError):
         app.logger.error("Configuration error: %s", error)
@@ -570,6 +698,7 @@ def create_question_set():
         "question_set_id": question_set_id,
         "level": level,
         "format": document_format,
+        "created_at": time.monotonic(),
         **validated,
     }
 
@@ -653,7 +782,10 @@ def create_submission(question_set_id):
         "results": results,
     }
     with store_lock:
-        submissions[submission_id] = submission
+        submissions[submission_id] = {
+            **submission,
+            "created_at": time.monotonic(),
+        }
 
     return jsonify(submission), 201
 
@@ -734,7 +866,10 @@ def create_detailed_explanation(question_set_id):
             return problem(409, "Conflict", "詳細説明は、このパッセージでは1度だけ利用できます。")
 
         # 同時クリックによる複数回送信を防ぐため、LLM通信前に利用中として確保する。
-        detailed_explanations[usage_key] = {"status": "processing"}
+        detailed_explanations[usage_key] = {
+            "status": "processing",
+            "created_at": time.monotonic(),
+        }
 
     try:
         client, model = get_llm_client()
@@ -762,6 +897,7 @@ def create_detailed_explanation(question_set_id):
             DETAILED_EXPLANATION_MAX_CHARS,
             "詳細説明",
         )
+        validate_japanese_text(explanation_text, "詳細説明")
     except Exception as error:
         # 生成に失敗した場合は「1回」を消費せず、再試行を許可する。
         with store_lock:
@@ -769,10 +905,16 @@ def create_detailed_explanation(question_set_id):
                 detailed_explanations.pop(usage_key, None)
 
         if isinstance(error, openai.APITimeoutError):
-            app.logger.exception("Detailed explanation timed out")
+            app.logger.warning("Detailed explanation timed out (provider=%s)", LLM_PROVIDER)
             return problem(504, "LLM Timeout", "詳細説明の生成に時間がかかっています。もう一度お試しください。")
         if isinstance(error, (openai.APIConnectionError, openai.APIStatusError)):
-            app.logger.exception("Detailed explanation API failed: %s", error)
+            app.logger.warning(
+                "Detailed explanation API failed "
+                "(provider=%s, error_type=%s, status=%s)",
+                LLM_PROVIDER,
+                type(error).__name__,
+                getattr(error, "status_code", None),
+            )
             return problem(502, "LLM Failure", "AIサービスとの通信に失敗しました。もう一度お試しください。")
         if isinstance(error, RuntimeError):
             app.logger.error("Configuration error: %s", error)
@@ -789,7 +931,11 @@ def create_detailed_explanation(question_set_id):
         "remaining_uses": 0,
     }
     with store_lock:
-        detailed_explanations[usage_key] = {"status": "completed", **result}
+        detailed_explanations[usage_key] = {
+            "status": "completed",
+            "created_at": time.monotonic(),
+            **result,
+        }
 
     return jsonify(result), 201
 
@@ -919,6 +1065,7 @@ def create_time_attack():
         "current_set_index": 0,
         "answers": {},
         "started_at": time.monotonic(),
+        "created_at": time.monotonic(),
         "finished": False,
         "result": None,
     }
