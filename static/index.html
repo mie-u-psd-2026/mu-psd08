@@ -495,18 +495,18 @@
                                 class="clickable-sentence"
                                 :class="[
                                     evidenceClass(sentence, submission.results),
-                                    { 'selected-sentence': selectedSentence === sentence }
+                                    { 'selected-sentence': selectedSentenceFor(questionSet.question_set_id) === sentence }
                                 ]"
-                                :disabled="detailedExplanationLoading || (detailedExplanationUsed && selectedSentence !== sentence)"
+                                :disabled="detailedExplanationLoading || (isDetailedExplanationUsed(questionSet.question_set_id) && selectedSentenceFor(questionSet.question_set_id) !== sentence)"
                                 @click="requestDetailedExplanation(questionSet.question_set_id, sentence)"
                             >{{ sentence }}</button>
                         </template>
                         <template v-else>{{ questionSet.passage }}</template>
                     </div>
-                    <p v-if="mode === 'normal' && graded && !detailedExplanationUsed" class="small text-muted mt-2 mb-0">
+                    <p v-if="mode === 'normal' && graded && !isDetailedExplanationUsed(questionSet.question_set_id)" class="small text-muted mt-2 mb-0">
                         気になる英文をクリックすると、文法や重要フレーズを1度だけ詳しく確認できます。
                     </p>
-                    <p v-if="mode === 'normal' && graded && detailedExplanationUsed" class="small text-muted mt-2 mb-0">
+                    <p v-if="mode === 'normal' && graded && isDetailedExplanationUsed(questionSet.question_set_id)" class="small text-muted mt-2 mb-0">
                         選択済みの英文をもう一度クリックすると、詳細説明を再表示できます。
                     </p>
                     <p v-if="mode === 'normal' && graded" class="small evidence-note mb-0">
@@ -597,10 +597,10 @@
                     タイムアタック得点：{{ timeAttackResult.score }} / {{ timeAttackResult.total }}
                 </div>
                 <p class="text-center fw-bold mb-3">セット {{ reviewSetIndex + 1 }} / {{ timeAttackReviewSets.length }}</p>
-                <p v-if="!detailedExplanationUsed" class="small text-muted">
-                    気になる英文をクリックすると、全5セットを通して1度だけ文法や重要フレーズを確認できます。
+                <p v-if="currentReviewSet && !isDetailedExplanationUsed(currentReviewSet.question_set_id)" class="small text-muted">
+                    気になる英文をクリックすると、このパッセージで1度だけ文法や重要フレーズを確認できます。
                 </p>
-                <p v-if="detailedExplanationUsed" class="small text-muted">
+                <p v-if="currentReviewSet && isDetailedExplanationUsed(currentReviewSet.question_set_id)" class="small text-muted">
                     選択済みの英文をもう一度クリックすると、詳細説明を再表示できます。
                 </p>
                 <div class="form-check form-switch mb-3">
@@ -622,9 +622,9 @@
                             class="clickable-sentence"
                             :class="[
                                 evidenceClass(sentence, currentReviewSet.results),
-                                { 'selected-sentence': selectedSentence === sentence }
+                                { 'selected-sentence': selectedSentenceFor(currentReviewSet.question_set_id) === sentence }
                             ]"
-                            :disabled="detailedExplanationLoading || (detailedExplanationUsed && selectedSentence !== sentence)"
+                            :disabled="detailedExplanationLoading || (isDetailedExplanationUsed(currentReviewSet.question_set_id) && selectedSentenceFor(currentReviewSet.question_set_id) !== sentence)"
                             @click="requestDetailedExplanation(currentReviewSet.question_set_id, sentence)"
                         >{{ sentence }}</button>
                         <button class="btn btn-outline-secondary btn-sm mt-3" @click="toggleTranslation(currentReviewSet.question_set_id)">
@@ -677,7 +677,7 @@
                         </div>
                         <p>次の英文について、文法・重要単語・フレーズをAIが説明します。</p>
                         <p class="selected-sentence rounded p-2">{{ pendingSentence }}</p>
-                        <div class="alert alert-warning">詳細説明を生成できるのは、この挑戦で1度だけです。</div>
+                        <div class="alert alert-warning">詳細説明を生成できるのは、このパッセージで1度だけです。</div>
                         <div class="d-flex justify-content-end gap-2">
                             <button class="btn btn-outline-secondary" @click="cancelDetailedExplanation">キャンセル</button>
                             <button class="btn btn-primary" @click="confirmDetailedExplanation">この文を説明する</button>
@@ -698,7 +698,7 @@
                         <template v-if="detailedExplanation">
                             <p class="selected-sentence rounded p-2">{{ detailedExplanation.selected_text }}</p>
                             <div class="passage">{{ detailedExplanation.explanation }}</div>
-                            <p class="small text-muted mt-3 mb-0">詳細説明はこの挑戦では使用済みです。</p>
+                            <p class="small text-muted mt-3 mb-0">詳細説明はこのパッセージでは使用済みです。</p>
                         </template>
                     </div>
                 </div>
@@ -762,7 +762,8 @@ createApp({
             detailedExplanation: null,
             detailedExplanationLoading: false,
             detailedExplanationError: '',
-            detailedExplanationUsed: false,
+            detailedExplanationsBySet: {},
+            selectedSentencesBySet: {},
             selectedSentence: '',
             detailModalOpen: false,
             detailConfirmationOpen: false,
@@ -933,12 +934,12 @@ createApp({
                 401: '現在AI機能を利用できません。管理者にお問い合わせください。',
                 403: '現在AI機能を利用できません。管理者にお問い合わせください。',
                 404: '対象の問題が見つかりません。ホーム画面からやり直してください。',
-                409: 'この問題はすでに処理されています。画面を更新してやり直してください。',
+                409: '現在の状態ではこの操作を行えません。画面の状態を確認してください。',
                 413: '送信するデータが大きすぎます。',
                 422: '送信内容が条件を満たしていません。回答内容を確認してください。',
-                429: 'AIの利用上限に達しました。しばらくしてからお試しください。',
+                429: '短時間に操作が集中しています。しばらくしてからお試しください。',
                 500: 'サーバーで問題が発生しました。もう一度お試しください。',
-                502: 'AIが正しい形式の内容を生成できませんでした。もう一度お試しください。',
+                502: 'AIの処理に失敗しました。しばらくしてからもう一度お試しください。',
                 503: '現在サービスを利用できません。しばらくしてからお試しください。',
                 504: 'AIの応答に時間がかかっています。しばらくしてからお試しください。'
             };
@@ -978,7 +979,8 @@ createApp({
             this.detailedExplanation = null;
             this.detailedExplanationLoading = false;
             this.detailedExplanationError = '';
-            this.detailedExplanationUsed = false;
+            this.detailedExplanationsBySet = {};
+            this.selectedSentencesBySet = {};
             this.selectedSentence = '';
             this.detailModalOpen = false;
             this.detailConfirmationOpen = false;
@@ -1185,8 +1187,10 @@ createApp({
                 return;
             }
 
-            if (this.detailedExplanationUsed) {
-                if (this.detailedExplanation && this.selectedSentence === sentence) {
+            if (this.isDetailedExplanationUsed(questionSetId)) {
+                if (this.selectedSentenceFor(questionSetId) === sentence) {
+                    this.detailedExplanation = this.detailedExplanationsBySet[questionSetId];
+                    this.selectedSentence = sentence;
                     this.detailModalOpen = true;
                 }
                 return;
@@ -1229,13 +1233,20 @@ createApp({
                     throw new Error(this.errorMessageForResponse(response.status, '詳細説明の生成に失敗しました。'));
                 }
                 this.detailedExplanation = data;
-                this.detailedExplanationUsed = true;
+                this.detailedExplanationsBySet[questionSetId] = data;
+                this.selectedSentencesBySet[questionSetId] = sentence;
             } catch (error) {
                 this.detailedExplanationError = this.clientErrorMessage(error, '詳細説明の生成に失敗しました。');
                 this.selectedSentence = '';
             } finally {
                 this.detailedExplanationLoading = false;
             }
+        },
+        isDetailedExplanationUsed(questionSetId) {
+            return Boolean(questionSetId && this.detailedExplanationsBySet[questionSetId]);
+        },
+        selectedSentenceFor(questionSetId) {
+            return this.selectedSentencesBySet[questionSetId] || '';
         },
         async generateQuestionSet() {
             this.stopTimer();
