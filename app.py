@@ -3,6 +3,7 @@ import os
 import random
 import re
 import time
+from collections import defaultdict, deque
 from threading import Lock
 from uuid import uuid4
 
@@ -29,10 +30,15 @@ submissions = {}
 time_attacks = {}
 detailed_explanations = {}
 store_lock = Lock()
+rate_limit_buckets = defaultdict(deque)
+rate_limit_lock = Lock()
 
 TIME_ATTACK_SET_COUNT = 5
 TIME_ATTACK_TIME_LIMIT_SECONDS = 600
 GENERATION_MAX_ATTEMPTS = 2
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_MAX_REQUESTS = 60
+LLM_RATE_LIMIT_MAX_REQUESTS = 10
 
 
 @app.route("/")
@@ -55,6 +61,61 @@ def problem(status, title, detail, invalid_params=None):
     response.status_code = status
     response.content_type = "application/problem+json"
     return response
+
+
+def rate_limit_response(retry_after):
+    response = problem(
+        429,
+        "Too Many Requests",
+        "短時間にアクセスが集中しています。しばらくしてからお試しください。",
+    )
+    response.headers["Retry-After"] = str(max(1, int(retry_after)))
+    return response
+
+
+def exceeds_rate_limit(client_ip, category, limit, now):
+    """同一IP・同一カテゴリの直近1分間のリクエスト数を検査する。"""
+    key = (client_ip, category)
+    with rate_limit_lock:
+        bucket = rate_limit_buckets[key]
+        cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+        if len(bucket) >= limit:
+            return True, RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])
+        bucket.append(now)
+    return False, 0
+
+
+@app.before_request
+def limit_api_requests():
+    """画面を経由しない連続API呼び出しもIP単位で制限する。"""
+    if not request.path.startswith("/api/v1/"):
+        return None
+
+    client_ip = request.remote_addr or "unknown"
+    now = time.monotonic()
+    exceeded, retry_after = exceeds_rate_limit(
+        client_ip, "all", RATE_LIMIT_MAX_REQUESTS, now
+    )
+    if exceeded:
+        return rate_limit_response(retry_after)
+
+    uses_llm = (
+        request.method == "POST"
+        and (
+            request.path in {"/api/v1/question-sets", "/api/v1/time-attacks"}
+            or request.path.endswith("/explanations")
+        )
+    )
+    if uses_llm:
+        exceeded, retry_after = exceeds_rate_limit(
+            client_ip, "llm", LLM_RATE_LIMIT_MAX_REQUESTS, now
+        )
+        if exceeded:
+            return rate_limit_response(retry_after)
+
+    return None
 
 
 def get_llm_client():
@@ -437,8 +498,8 @@ def find_explanation_target(question_set_id):
             None,
         )
         if question_set:
-            # タイムアタックは5セット全体で詳細説明を1回だけ利用できる。
-            return question_set, f"time_attack:{time_attack_id}", time_attack["finished"]
+            # タイムアタックも問題セット（1パッセージ）ごとに1回利用できる。
+            return question_set, f"question_set:{question_set_id}", time_attack["finished"]
 
     return None, None, False
 
@@ -490,7 +551,7 @@ def create_detailed_explanation(question_set_id):
         if selected_text not in question_set["passage"]:
             return problem(422, "Validation Error", "本文に含まれる英文を選択してください。")
         if usage_key in detailed_explanations:
-            return problem(409, "Conflict", "詳細説明は1度だけ利用できます。")
+            return problem(409, "Conflict", "詳細説明は、このパッセージでは1度だけ利用できます。")
 
         # 同時クリックによる複数回送信を防ぐため、LLM通信前に利用中として確保する。
         detailed_explanations[usage_key] = {"status": "processing"}
