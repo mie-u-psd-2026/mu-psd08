@@ -4,6 +4,7 @@ import random
 import re
 import time
 from collections import defaultdict, deque
+from difflib import SequenceMatcher
 from threading import Lock
 from uuid import uuid4
 
@@ -36,6 +37,9 @@ rate_limit_lock = Lock()
 TIME_ATTACK_SET_COUNT = 5
 TIME_ATTACK_TIME_LIMIT_SECONDS = 600
 GENERATION_MAX_ATTEMPTS = 2
+TIME_ATTACK_SET_MAX_ATTEMPTS = 3
+PASSAGE_SIMILARITY_LIMIT = 0.72
+QUESTION_SIMILARITY_LIMIT = 0.86
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_REQUESTS = 60
 LLM_RATE_LIMIT_MAX_REQUESTS = 10
@@ -236,9 +240,20 @@ FORMAT_INSTRUCTIONS = {
     "article": "Write a short informational article with a title and logically organized paragraphs.",
 }
 
-def create_prompt(level, document_format):
+def create_prompt(level, document_format, previous_passages=None):
     difficulty_instruction = LEVEL_INSTRUCTIONS[level]
     format_instruction = FORMAT_INSTRUCTIONS[document_format]
+    previous_passages = previous_passages or []
+    diversity_instruction = ""
+    if previous_passages:
+        previous_summaries = "\n".join(
+            f"- {passage[:180]}" for passage in previous_passages
+        )
+        diversity_instruction = f"""
+- Make the topic, situation, people, organization, and key details clearly different
+  from all of these previously generated passages:
+{previous_summaries}
+"""
 
     return f"""
 Create one original English reading comprehension exercise.
@@ -257,6 +272,7 @@ Requirements:
 - explanation must be written in Japanese
 - The correct answer, evidence, and explanation must be consistent
 - Do not reproduce an existing TOEIC question
+{diversity_instruction}
 - Return only valid JSON without Markdown
 
 Required JSON structure:
@@ -283,7 +299,7 @@ Required JSON structure:
 """
 
 
-def generate_question_set_with_llm(level, document_format):
+def generate_question_set_with_llm(level, document_format, previous_passages=None):
     """LLMで1つの英文と2問を生成し、形式不正時は再生成する。"""
     client, model = get_llm_client()
     last_error = None
@@ -297,7 +313,10 @@ def generate_question_set_with_llm(level, document_format):
                         "role": "system",
                         "content": "You create accurate English exercises and return only valid JSON.",
                     },
-                    {"role": "user", "content": create_prompt(level, document_format)},
+                    {
+                        "role": "user",
+                        "content": create_prompt(level, document_format, previous_passages),
+                    },
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.4,
@@ -312,6 +331,90 @@ def generate_question_set_with_llm(level, document_format):
                 GENERATION_MAX_ATTEMPTS,
                 error,
             )
+
+    raise last_error
+
+
+def normalized_similarity_text(text):
+    """大文字小文字や記号の違いを除いて類似度を比較できる形にする。"""
+    return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def text_similarity(first, second):
+    """語順の近さと単語の重なりのうち、高い方を類似度として返す。"""
+    first = normalized_similarity_text(first)
+    second = normalized_similarity_text(second)
+    if not first or not second:
+        return 0.0
+
+    sequence_score = SequenceMatcher(None, first, second).ratio()
+    first_words = set(first.split())
+    second_words = set(second.split())
+    word_score = len(first_words & second_words) / len(first_words | second_words)
+    return max(sequence_score, word_score)
+
+
+def validate_time_attack_diversity(candidate, generated_sets):
+    """既に生成済みの長文・設問との重複や強い類似を拒否する。"""
+    candidate_questions = " ".join(
+        question["question"] for question in candidate["questions"]
+    )
+
+    for previous in generated_sets:
+        passage_score = text_similarity(candidate["passage"], previous["passage"])
+        if passage_score >= PASSAGE_SIMILARITY_LIMIT:
+            raise ValueError(
+                f"Passage is too similar to an earlier set ({passage_score:.2f})."
+            )
+
+        previous_questions = " ".join(
+            question["question"] for question in previous["questions"]
+        )
+        question_score = text_similarity(candidate_questions, previous_questions)
+        if question_score >= QUESTION_SIMILARITY_LIMIT:
+            raise ValueError(
+                f"Questions are too similar to an earlier set ({question_score:.2f})."
+            )
+
+
+def generate_distinct_time_attack_set(level, document_format, generated_sets):
+    """現在の1セットだけを再試行し、成功済みセットは保持する。"""
+    previous_passages = [item["passage"] for item in generated_sets]
+    last_error = None
+
+    for attempt in range(1, TIME_ATTACK_SET_MAX_ATTEMPTS + 1):
+        try:
+            candidate = generate_question_set_with_llm(
+                level,
+                document_format,
+                previous_passages,
+            )
+            validate_time_attack_diversity(candidate, generated_sets)
+            return candidate
+        except openai.APIStatusError as error:
+            # 認証失敗・利用上限などの4xxは待っても解消しないため再試行しない。
+            if error.status_code < 500:
+                raise
+            last_error = error
+        except (
+            json.JSONDecodeError,
+            ValueError,
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+        ) as error:
+            last_error = error
+
+        app.logger.warning(
+            "Time attack set generation failed on attempt %s/%s "
+            "(set=%s, format=%s): %s",
+            attempt,
+            TIME_ATTACK_SET_MAX_ATTEMPTS,
+            len(generated_sets) + 1,
+            document_format,
+            last_error,
+        )
+        if attempt < TIME_ATTACK_SET_MAX_ATTEMPTS:
+            time.sleep(attempt)
 
     raise last_error
 
@@ -710,7 +813,11 @@ def create_time_attack():
     generated_sets = []
     try:
         for document_format in time_attack_formats:
-            validated = generate_question_set_with_llm("intermediate", document_format)
+            validated = generate_distinct_time_attack_set(
+                "intermediate",
+                document_format,
+                generated_sets,
+            )
             question_set_id = str(uuid4())
             generated_sets.append(
                 {
