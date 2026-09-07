@@ -1,79 +1,1582 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sample Application</title>
-    <!-- Vue.jsをCDNから読み込み -->
+    <title>English Reading Quest</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <!-- BootStrapをCDNから読み込み -->
-	<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css">
+    <style>
+        body { background: #e8f1fb; }
+        .app-card { max-width: 900px; margin: 32px auto; }
+        .app-card > .card:not(.hero) {
+            min-height: calc(100vh - 64px);
+            overflow: hidden;
+            border: 2px solid #a9bfdc;
+            border-radius: 30px;
+            background: #ffffff;
+            box-shadow: 0 16px 38px rgba(69, 96, 132, 0.18) !important;
+        }
+        .setup-panel {
+            margin-top: 38px;
+            padding: 46px;
+            border: 1px solid #d9e4f2;
+            border-radius: 24px;
+            background: #f8fbff;
+            text-align: center;
+        }
+        .setup-label {
+            color: #0d6efd;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+        }
+        .setup-group {
+            max-width: 680px;
+            margin: 0 auto 30px;
+            text-align: left;
+        }
+        .option-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .option-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 58px;
+            padding: 14px 18px;
+            border: 2px solid #d9e4f2;
+            border-radius: 12px;
+            background: #ffffff;
+            cursor: pointer;
+            transition: border-color 150ms ease, background-color 150ms ease;
+        }
+        .option-card:hover { border-color: #8fb2e0; }
+        .option-card:has(input:checked) {
+            border-color: #0d6efd;
+            background: #edf5ff;
+        }
+        .option-card input { margin: 0; accent-color: #0d6efd; }
+        .setup-start { min-width: 280px; padding: 13px 30px; font-size: 1.05rem; }
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 3000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(232, 241, 251, 0.48);
+            backdrop-filter: blur(10px);
+        }
+        .loading-box {
+            min-width: 300px;
+            padding: 32px 42px;
+            border: 1px solid rgba(169, 191, 220, 0.85);
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.78);
+            box-shadow: 0 14px 34px rgba(69, 96, 132, 0.16);
+            text-align: center;
+        }
+        .loading-spinner {
+            width: 58px;
+            height: 58px;
+            margin: 0 auto 22px;
+            border: 5px solid #dce9f8;
+            border-top-color: #0d6efd;
+            border-radius: 50%;
+            animation: loading-spin 800ms linear infinite;
+        }
+        .loading-title { font-size: 1.7rem; font-weight: 700; letter-spacing: 0.04em; }
+        @keyframes loading-spin { to { transform: rotate(360deg); } }
+        .passage { white-space: pre-wrap; line-height: 1.8; }
+        .choice { display: block; padding: 9px 12px; margin: 7px 0; border: 1px solid #d9dee5; border-radius: 6px; }
+        .choice:hover { background: #f8f9fa; }
+        .explanation {
+            background: #f5f9ff;
+            border: 1px solid #d5e3f4;
+            border-left: 4px solid #5b8fd6;
+            box-shadow: 0 6px 18px rgba(69, 96, 132, 0.07);
+        }
+        .timer { font-size: 1.5rem; font-weight: bold; }
+        .game-over { background: #f8d7da; border-left: 4px solid #dc3545; }
+        .clickable-sentence {
+            display: inline;
+            padding: 2px 3px;
+            margin: 0 1px;
+            border: 0;
+            border-radius: 4px;
+            background: transparent;
+            color: inherit;
+            text-align: left;
+        }
+        .clickable-sentence:not(:disabled) { cursor: pointer; text-decoration: underline dotted #0d6efd; }
+        .clickable-sentence:not(:disabled):hover { background: #e7f1ff; }
+        .clickable-sentence:disabled { opacity: 1; }
+        .selected-sentence { outline: 2px solid #fd7e14; }
+        .evidence-q1 { background: #e8f1ff; box-shadow: inset 0 -2px 0 #4f86d9; }
+        .evidence-q2 { background: #f0ebff; box-shadow: inset 0 -2px 0 #8468d7; }
+        .evidence-both {
+            background: linear-gradient(90deg, #e8f1ff 50%, #f0ebff 50%);
+            box-shadow: inset 0 -2px 0 #6f76d7;
+        }
+        .evidence-note {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: #edf4fc;
+            color: #425b78;
+        }
+        .study-stats { background: #f8f9fa; }
+        .session-rank { background: #eef4ff; border-left: 4px solid #0d6efd; }
+        .hero {
+            text-align: center;
+            overflow: visible;
+            border: 0;
+            background: transparent;
+            box-shadow: none !important;
+        }
+        .hero-intro {
+            min-height: calc(100vh - 112px);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 70px 20px 110px;
+            overflow: hidden;
+            position: relative;
+            border-radius: 30px;
+            border: 2px solid #a9bfdc;
+            color: #212529;
+            background: #ffffff;
+            box-shadow: 0 16px 38px rgba(69, 96, 132, 0.18);
+        }
+        .hero-intro::after {
+            content: '';
+            position: absolute;
+            inset: 18px;
+            pointer-events: none;
+            border-radius: 22px;
+            background: none;
+        }
+        .hero-intro > * { position: relative; z-index: 1; }
+        .hero-intro .hero-title { color: #212529; text-shadow: none; }
+        .hero-intro .lead { color: #6c757d !important; }
+        .hero-title { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; }
+        .hero-button { min-width: 220px; padding: 14px 24px; font-size: 1.1rem; }
+        .landing-section {
+            padding: 56px 20px;
+        }
+        .home-content {
+            position: relative;
+            margin: 48px -24px -24px;
+            overflow: hidden;
+            border-radius: 30px 30px 4px 4px;
+            background: #ffffff;
+            box-shadow: 0 22px 60px rgba(28, 52, 91, 0.14);
+            text-align: center;
+        }
+        .home-content::before {
+            content: '';
+            display: block;
+            width: 58px;
+            height: 5px;
+            margin: 18px auto 0;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #0d6efd, #6f42c1);
+            opacity: 0.72;
+        }
+        .home-content .landing-section:nth-of-type(even) {
+            background: linear-gradient(135deg, #f7f9ff, #fffaf5);
+        }
+        .scroll-reveal {
+            opacity: 0;
+            transform: translateY(42px) scale(0.985);
+            transition: opacity 650ms ease, transform 650ms cubic-bezier(.2,.75,.25,1);
+        }
+        .scroll-reveal.is-visible {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+        .landing-section h2 { font-weight: 750; margin-bottom: 20px; }
+        .landing-copy { max-width: 680px; margin: 0 auto; line-height: 2; }
+        .feature-card {
+            height: 100%;
+            padding: 24px 20px;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid #dfe6ef;
+            border-radius: 14px;
+            text-align: left;
+        }
+        .feature-number { color: #0d6efd; font-size: 0.85rem; font-weight: 700; letter-spacing: 0.08em; }
+        .play-step { text-align: left; padding: 18px; border-left: 3px solid #0d6efd; background: #fff; }
+        .landing-footer { padding: 30px 20px 12px; color: #6c757d; }
+        .home-menu {
+            position: fixed;
+            top: 32px;
+            left: 32px;
+            z-index: 30;
+        }
+        .menu-trigger {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            border: 1px solid #cbd9e9;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.94);
+            box-shadow: 0 5px 18px rgba(69, 96, 132, 0.14);
+            cursor: pointer;
+        }
+        .menu-trigger span { width: 22px; height: 2px; border-radius: 2px; background: #24364d; }
+        .menu-items {
+            min-width: 180px;
+            margin-top: 8px;
+            padding: 8px;
+            border: 1px solid #d5e1ef;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.97);
+            box-shadow: 0 12px 28px rgba(69, 96, 132, 0.18);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-6px);
+            transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
+        }
+        .home-menu:hover .menu-items,
+        .home-menu:focus-within .menu-items {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+        .menu-items button {
+            width: 100%;
+            padding: 10px 12px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: #24364d;
+            text-align: left;
+        }
+        .menu-items button:hover { background: #edf5ff; color: #0d6efd; }
+        .home-progress {
+            position: fixed;
+            top: 32px;
+            right: 32px;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid #dee2e6;
+            border-radius: 14px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+            text-align: left;
+        }
+        .progress-ring {
+            width: 72px;
+            height: 72px;
+            display: grid;
+            place-items: center;
+            border-radius: 50%;
+            background: conic-gradient(#0d6efd calc(var(--rate) * 1%), #e5e9ef 0);
+            position: relative;
+        }
+        .progress-ring::before {
+            content: '';
+            position: absolute;
+            inset: 8px;
+            border-radius: 50%;
+            background: white;
+        }
+        .progress-ring span { position: relative; z-index: 1; font-weight: 700; }
+        @media (max-width: 700px) {
+            .home-progress {
+                position: static;
+                margin: 0 auto 32px;
+                width: fit-content;
+            }
+        }
+        .detail-modal-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 1050;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(20, 30, 45, 0.62);
+        }
+        .detail-modal { width: min(760px, 100%); max-height: 88vh; overflow-y: auto; }
+        .modal-close { font-size: 1.5rem; line-height: 1; border: 0; background: transparent; }
+        .rank-celebration {
+            width: min(560px, 100%);
+            border: 1px solid #d9e4f2;
+            border-radius: 24px;
+            background: #ffffff;
+            box-shadow: 0 22px 60px rgba(28, 52, 91, 0.24);
+            animation: celebration-enter 360ms cubic-bezier(.2,.8,.2,1);
+        }
+        .rank-medal {
+            width: 86px;
+            height: 86px;
+            display: grid;
+            place-items: center;
+            margin: 0 auto 18px;
+            border-radius: 50%;
+            background: #fff4c7;
+            color: #9a6b00;
+            font-size: 2.3rem;
+            box-shadow: inset 0 0 0 8px #fff9e4;
+        }
+        @keyframes celebration-enter {
+            from { opacity: 0; transform: translateY(-34px) scale(.97); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+    </style>
 </head>
 <body>
-
-    <div id="app" class="container">
-        <h2 class="mb-4">サンプルアプリ</h2>
-
-        <div class="mb-3">
-            <label for="inputText" class="form-label">テキストを入力してください:</label>
-            <textarea id="inputText" class="form-control" rows="5" v-model="inputText" placeholder="ここにテキストを入力..."></textarea>
-        </div>
-
-        <div class="mb-3">
-            <button @click="execute" class="btn btn-primary">実行</button>
-            <button @click="execute_kansai" class="btn btn-success ms-2">関西弁で実行</button>
-        </div>
-        
-        <h3>結果:</h3>
-        <div class="result-area p-3 border rounded" :class="{ 'alert alert-info': resultText && !resultText.startsWith('エラー:'), 'alert alert-danger': resultText.startsWith('エラー:') }">
-            <pre style="white-space: pre-wrap;">{{ resultText }}</pre>
+<div id="app" class="container app-card">
+    <div v-if="loading" class="loading-overlay" role="status" aria-live="polite">
+        <div class="loading-box">
+            <div class="loading-spinner" aria-hidden="true"></div>
+            <p class="loading-title mb-2">Loading...</p>
+            <p class="text-muted mb-4">AIが問題を作成しています。</p>
+            <button class="btn btn-outline-secondary" @click="cancelGeneration(false)">キャンセル</button>
         </div>
     </div>
+    <nav v-if="screen === 'home'" class="home-menu" aria-label="ホームメニュー">
+        <button type="button" class="menu-trigger" aria-label="メニューを開く">
+            <span></span><span></span><span></span>
+        </button>
+        <div class="menu-items">
+            <button type="button" @click="scrollToSection('about')">ABOUT</button>
+            <button type="button" @click="scrollToSection('modes')">MODES</button>
+            <button type="button" @click="scrollToSection('features')">FEATURES</button>
+            <button type="button" @click="scrollToSection('how-to-play')">HOW TO PLAY</button>
+        </div>
+    </nav>
+    <div class="card shadow-sm" :class="{ hero: screen === 'home' }">
+        <div class="card-body p-4">
+            <div class="home-progress">
+                <div class="progress-ring" :style="{ '--rate': rankProgressRate }">
+                    <span>{{ rankProgressText }}</span>
+                </div>
+                <div>
+                    <span class="small text-muted">今回の学習ランク</span><br>
+                    <strong>{{ sessionRank }}</strong><br>
+                    <span v-if="correctToNextRank > 0" class="small">あと{{ correctToNextRank }}問正解で{{ nextRankName }}</span>
+                    <span v-else class="small">最高ランクに到達</span><br>
+                    <span class="small text-muted">今回の正答率 {{ totalAnswers === 0 ? '―' : accuracyRate + '%' }}</span>
+                </div>
+            </div>
+            <template v-if="screen === 'home'">
+                <div class="hero-intro">
+                    <p class="text-primary fw-bold mb-2">NEVER RUN OUT OF TOEIC</p>
+                    <h1 class="hero-title mb-3">English Reading Quest</h1>
+                    <p class="lead text-muted mb-5">短い時間で、AIが作るPart 7形式の問題に挑戦しよう。</p>
+                    <div class="d-flex flex-column flex-sm-row justify-content-center gap-3">
+                        <button class="btn btn-primary hero-button" @click="openNormalSetup">通常学習を始める</button>
+                        <button class="btn btn-danger hero-button" @click="startTimeAttack">タイムアタック</button>
+                    </div>
+                </div>
 
-    <script>
-        const { createApp } = Vue;
+                <div class="home-content">
+                <section id="about" class="landing-section scroll-reveal">
+                    <p class="feature-number">ABOUT</p>
+                    <h2>English Reading Questとは</h2>
+                    <p class="landing-copy">
+                        TOEIC Part 7形式の英文・設問・解説を生成AIがその場で作る、PC向け読解トレーニングアプリです。
+                        初級・中級・上級と文章形式を選び、毎回異なる2問へすぐに挑戦できます。
+                        採点後は正解だけでなく、本文中の根拠、日本語解説、全文訳、気になる一文の詳細説明まで確認できます。
+                    </p>
+                </section>
 
-        createApp({
-            data() {
-                return {
-                    inputText: '',
-                    resultText: 'ここに結果が表示されます。'
-                };
-            },
-            methods: {
-                async sendRequest(context = null) {
-                    this.resultText = '処理中...';
-                    try {
-                        const payload = { text: this.inputText };
-                        if (context) {
-                            payload.context = context;
-                        }
+                <section id="modes" class="landing-section scroll-reveal">
+                    <p class="feature-number">MODES &amp; PROGRESS</p>
+                    <h2>2つの学習モードとランク</h2>
+                    <div class="row g-3">
+                        <div class="col-md-6"><div class="feature-card"><span class="feature-number">NORMAL</span><h3 class="h5 mt-2">通常学習</h3><p class="text-muted mb-0">初級・中級・上級から難易度を、メール・お知らせ・広告・記事から文章形式を選びます。1つの英文につき2問へ自分のペースで回答し、採点後は根拠・日本語解説・全文訳を確認できます。</p></div></div>
+                        <div class="col-md-6"><div class="feature-card"><span class="feature-number">TIME ATTACK</span><h3 class="h5 mt-2">タイムアタック</h3><p class="text-muted mb-0">中級の英文を2問×5セット、合計10問出題します。文章形式はセットごとにランダムで、制限時間を過ぎると未回答を不正解として自動採点します。終了後は1セットずつ前後に移動して復習できます。</p></div></div>
+                        <div class="col-12"><div class="feature-card"><span class="feature-number">RANK</span><h3 class="h5 mt-2">右上の学習ランク</h3><p class="text-muted mb-2">このブラウザを開いている間の正解数に応じて、ウォーミングアップ（0～2問）、ブロンズ（3～5問）、シルバー（6～9問）、最高ランクのゴールド（10問以上）へ昇格します。</p><p class="text-muted mb-0">円は次のランクまでの進捗、タスクは昇格までに必要な正解数を示します。回答数・正答率・ランクは同じタブを開いている間だけ保存され、タブを閉じるとリセットされます。</p></div></div>
+                    </div>
+                </section>
 
-                        const response = await fetch('/send_api', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(payload)
-                        });
-                        const data = await response.json();
-                        if (response.ok) {
-                            this.resultText = data.processed_text;
-                        } else {
-                            this.resultText = `エラー: ${data.error || '不明なエラーが発生しました。'}`;
-                        }
-                    } catch (error) {
-                        this.resultText = `エラー: ${error.message}`;
-                    }
-                },
-                execute() {
-                    this.sendRequest();
-                },
-                execute_kansai() {
-                    this.sendRequest("あなたは親切な関西人です。ユーザーからの入力に対して、必ず関西弁で、親しみやすく、そして140字以内で回答してください。");
-                }
+                <section id="features" class="landing-section scroll-reveal">
+                    <p class="feature-number">FEATURES</p>
+                    <h2>このアプリの魅力</h2>
+                    <div class="row g-3">
+                        <div class="col-md-6"><div class="feature-card"><span class="feature-number">01</span><h3 class="h5 mt-2">毎回、新しい問題</h3><p class="text-muted mb-0">AIがオリジナルの英文と設問を生成するため、答えを覚えず繰り返し練習できます。</p></div></div>
+                        <div class="col-md-6"><div class="feature-card"><span class="feature-number">02</span><h3 class="h5 mt-2">自分に合った難易度</h3><p class="text-muted mb-0">初級・中級・上級から選び、現在の英語力に合った長文へ挑戦できます。</p></div></div>
+                        <div class="col-md-6"><div class="feature-card"><span class="feature-number">03</span><h3 class="h5 mt-2">根拠まで分かる解説</h3><p class="text-muted mb-0">正解、日本語解説、本文中の根拠を同じ画面で確認し、なぜその答えになるかを理解できます。</p></div></div>
+                        <div class="col-md-6"><div class="feature-card"><span class="feature-number">04</span><h3 class="h5 mt-2">英文を一文ずつ深掘り</h3><p class="text-muted mb-0">気になる英文を選び、文法構造や重要なフレーズをAIに詳しく説明してもらえます。</p></div></div>
+                    </div>
+                </section>
+
+                <section id="how-to-play" class="landing-section scroll-reveal">
+                    <p class="feature-number">HOW TO PLAY</p>
+                    <h2>遊び方</h2>
+                    <div class="row g-3">
+                        <div class="col-md-6"><div class="play-step"><strong>01　モードを選ぶ</strong><br><span class="text-muted">通常学習またはタイムアタックを選びます。</span></div></div>
+                        <div class="col-md-6"><div class="play-step"><strong>02　問題に挑戦</strong><br><span class="text-muted">英文を読み、各パッセージの2問へ回答します。</span></div></div>
+                        <div class="col-md-6"><div class="play-step"><strong>03　解説で復習</strong><br><span class="text-muted">正解、根拠、日本語訳を確認します。</span></div></div>
+                        <div class="col-md-6"><div class="play-step"><strong>04　分からない文を深掘り</strong><br><span class="text-muted">英文をクリックして、文法やフレーズを詳しく学びます。</span></div></div>
+                    </div>
+                </section>
+
+                <footer class="landing-footer scroll-reveal">
+                    <strong>English Reading Quest</strong><br>
+                    <span class="small">Never Run Out of TOEIC.</span>
+                </footer>
+                </div>
+            </template>
+
+            <template v-else>
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h1 class="h3 mb-1">English Reading Quest</h1>
+                    <p class="text-muted mb-0">難易度と文章形式を選び、Part 7形式の問題に挑戦します。</p>
+                </div>
+                <button class="btn btn-outline-secondary btn-sm" @click="goHome">ホーム</button>
+            </div>
+
+            <div v-if="screen === 'setup'" class="setup-panel mb-4">
+                <p class="setup-label mb-2">STUDY SETUP</p>
+                <h2 class="h3 fw-bold mb-2">学習条件を選択</h2>
+                <p class="text-muted mb-4">難易度と文章形式を選んで、Part 7形式の問題を始めましょう。</p>
+                <div class="setup-group">
+                    <h3 class="h6 fw-bold mb-3">1. 難易度を選択</h3>
+                    <div class="option-grid">
+                        <label class="option-card"><input type="radio" value="beginner" v-model="level"><span>初級</span></label>
+                        <label class="option-card"><input type="radio" value="intermediate" v-model="level"><span>中級</span></label>
+                        <label class="option-card"><input type="radio" value="advanced" v-model="level"><span>上級</span></label>
+                    </div>
+                </div>
+                <div class="setup-group">
+                    <h3 class="h6 fw-bold mb-3">2. 文章形式を選択</h3>
+                    <div class="option-grid">
+                        <label class="option-card"><input type="radio" value="email" v-model="documentFormat"><span>メール</span></label>
+                        <label class="option-card"><input type="radio" value="notice" v-model="documentFormat"><span>お知らせ</span></label>
+                        <label class="option-card"><input type="radio" value="advertisement" v-model="documentFormat"><span>広告</span></label>
+                        <label class="option-card"><input type="radio" value="article" v-model="documentFormat"><span>記事</span></label>
+                    </div>
+                </div>
+                <button class="btn btn-primary setup-start" @click="generateQuestionSet" :disabled="loading">
+                    {{ loading ? '問題を生成中...' : 'この条件で学習を始める' }}
+                </button>
+            </div>
+
+            <div v-if="error" class="alert alert-danger">
+                {{ error }}
+                <button v-if="lastGenerationAction && !questionSet" class="btn btn-outline-danger btn-sm ms-2" @click="retryLastGeneration">もう一度試す</button>
+            </div>
+
+            <template v-if="questionSet && !timeAttackResult">
+                <div v-if="mode === 'time_attack'" class="d-flex justify-content-between align-items-center alert alert-warning">
+                    <span>セット {{ currentSet }} / {{ totalSets }}</span>
+                    <span class="timer">残り時間 {{ formattedTime }}</span>
+                </div>
+                <div v-if="mode === 'normal'" class="text-end mb-2">
+                    <span class="badge bg-secondary">経過時間 {{ formattedNormalTime }} ／ 目安 03:00</span>
+                </div>
+
+                <section class="mb-4">
+                    <h2 class="h5">英文</h2>
+                    <div id="normal-passage" class="passage border rounded bg-white p-3">
+                        <template v-if="mode === 'normal' && graded">
+                            <button
+                                v-for="(sentence, sentenceIndex) in passageSentences(questionSet.passage)"
+                                :key="sentenceIndex"
+                                type="button"
+                                class="clickable-sentence"
+                                :class="[
+                                    evidenceClass(sentence, submission.results),
+                                    { 'selected-sentence': selectedSentence === sentence }
+                                ]"
+                                :disabled="detailedExplanationLoading || (detailedExplanationUsed && selectedSentence !== sentence)"
+                                @click="requestDetailedExplanation(questionSet.question_set_id, sentence)"
+                            >{{ sentence }}</button>
+                        </template>
+                        <template v-else>{{ questionSet.passage }}</template>
+                    </div>
+                    <p v-if="mode === 'normal' && graded && !detailedExplanationUsed" class="small text-muted mt-2 mb-0">
+                        気になる英文をクリックすると、文法や重要フレーズを1度だけ詳しく確認できます。
+                    </p>
+                    <p v-if="mode === 'normal' && graded && detailedExplanationUsed" class="small text-muted mt-2 mb-0">
+                        選択済みの英文をもう一度クリックすると、詳細説明を再表示できます。
+                    </p>
+                    <p v-if="mode === 'normal' && graded" class="small evidence-note mb-0">
+                        <span class="badge text-dark evidence-q1">Question 1の根拠を含む文</span>
+                        <span class="badge text-dark evidence-q2 ms-1">Question 2の根拠を含む文</span>
+                        <span class="d-block mt-2">色が付いた文が、それぞれの正解を判断する手掛かりです。</span>
+                    </p>
+                    <div v-if="mode === 'normal' && graded" class="mt-3">
+                        <button class="btn btn-outline-secondary btn-sm" @click="toggleTranslation('normal')">
+                            {{ isTranslationOpen('normal') ? '日本語訳を閉じる' : '日本語訳を表示' }}
+                        </button>
+                    </div>
+                    <div v-if="mode === 'normal' && graded && isTranslationOpen('normal')" class="border rounded bg-light p-3 mt-2">
+                        <h3 class="h6">英文の日本語訳</h3>
+                        <div class="passage">{{ submission.passage_translation }}</div>
+                    </div>
+                </section>
+
+                <div v-if="mode === 'normal' && graded" class="form-check form-switch mb-3">
+                    <input id="normal-incorrect-only" class="form-check-input" type="checkbox" v-model="showIncorrectOnly">
+                    <label class="form-check-label" for="normal-incorrect-only">不正解の問題だけ表示</label>
+                </div>
+                <div v-if="mode === 'normal' && graded && showIncorrectOnly && visibleNormalQuestions.length === 0" class="alert alert-success">
+                    2問とも正解です。復習が必要な問題はありません。
+                </div>
+
+                <section v-for="item in visibleNormalQuestions" :key="item.question_id" class="mb-4">
+                    <h2 class="h5">Question {{ questionNumber(item.question_id) }}</h2>
+                    <p>{{ item.question }}</p>
+                    <label v-for="(choice, choiceIndex) in item.choices" :key="choiceIndex" class="choice">
+                        <input
+                            type="radio"
+                            :name="item.question_id"
+                            :value="choiceIndex"
+                            v-model="answers[item.question_id]"
+                            :disabled="graded || submitting || timeAttackFinished"
+                            class="me-2"
+                        >
+                        {{ choice }}
+                    </label>
+
+                    <div v-if="graded" class="explanation rounded p-3 mt-3">
+                        <p class="fw-bold mb-2" :class="resultFor(item.question_id).correct ? 'text-success' : 'text-danger'">
+                            {{ resultFor(item.question_id).correct ? '正解' : '不正解' }}
+                        </p>
+                        <div class="mt-3">
+                            <p class="mb-1">正解：{{ item.choices[resultFor(item.question_id).correct_choice] }}</p>
+                            <p class="mb-1"><strong>本文中の根拠：</strong>{{ resultFor(item.question_id).evidence }}</p>
+                            <p class="mb-2">解説：{{ resultFor(item.question_id).explanation }}</p>
+                            <button class="btn btn-link btn-sm p-0" @click="scrollToEvidence('normal-passage')">本文の根拠を見る</button>
+                        </div>
+                    </div>
+                </section>
+
+                <div v-if="mode === 'normal' && !graded">
+                    <button class="btn btn-success" @click="submitAnswers" :disabled="submitting">
+                        {{ submitting ? '採点中...' : '回答する' }}
+                    </button>
+                    <span v-if="answerError" class="text-danger ms-3">{{ answerError }}</span>
+                </div>
+                <div v-if="mode === 'normal' && graded" class="alert alert-primary">
+                    得点：{{ submission.score }} / {{ submission.total }}
+                    <span class="ms-2">解答時間：{{ formattedNormalTime }}</span>
+                    <button class="btn btn-outline-primary btn-sm ms-3" @click="goToNextQuestion">次の問題</button>
+                </div>
+
+                <div v-if="mode === 'time_attack' && !timeAttackFinished">
+                    <button
+                        class="btn btn-outline-secondary me-2"
+                        @click="showPreviousSet"
+                        :disabled="submitting || currentSet === 1"
+                    >
+                        前の問題へ
+                    </button>
+                    <button class="btn btn-success" @click="submitTimeAttackSet" :disabled="submitting">
+                        {{ submitting ? '送信中...' : (currentSet === totalSets ? '10問を採点する' : '回答して次へ') }}
+                    </button>
+                    <span v-if="answerError" class="text-danger ms-3">{{ answerError }}</span>
+                </div>
+            </template>
+
+            <section v-if="timeAttackResult" class="mt-4">
+                <div v-if="timeAttackResult.timed_out" class="game-over rounded p-3 mb-3">
+                    <h2 class="h4 text-danger">時間切れ・ゲームオーバー</h2>
+                    <p class="mb-0">未回答の問題は不正解として採点しました。</p>
+                </div>
+                <div class="alert alert-primary">
+                    タイムアタック得点：{{ timeAttackResult.score }} / {{ timeAttackResult.total }}
+                </div>
+                <p class="text-center fw-bold mb-3">セット {{ reviewSetIndex + 1 }} / {{ timeAttackReviewSets.length }}</p>
+                <p v-if="!detailedExplanationUsed" class="small text-muted">
+                    気になる英文をクリックすると、全5セットを通して1度だけ文法や重要フレーズを確認できます。
+                </p>
+                <p v-if="detailedExplanationUsed" class="small text-muted">
+                    選択済みの英文をもう一度クリックすると、詳細説明を再表示できます。
+                </p>
+                <div class="form-check form-switch mb-3">
+                    <input id="ta-incorrect-only" class="form-check-input" type="checkbox" v-model="showIncorrectOnly">
+                    <label class="form-check-label" for="ta-incorrect-only">不正解の問題だけ表示</label>
+                </div>
+                <div v-if="showIncorrectOnly && currentReviewResults.length === 0" class="alert alert-success">
+                    このセットは2問とも正解です。復習が必要な問題はありません。
+                </div>
+                <div v-if="currentReviewSet" :id="'ta-passage-' + currentReviewSet.question_set_id" class="passage border rounded bg-white p-3 mb-3">
+                        <p class="fw-bold mb-2">
+                            セット{{ currentReviewSet.set_number }}の英文
+                            <span class="badge bg-secondary ms-2">{{ formatLabel(currentReviewSet.format) }}</span>
+                        </p>
+                        <button
+                            v-for="(sentence, sentenceIndex) in passageSentences(currentReviewSet.passage)"
+                            :key="sentenceIndex"
+                            type="button"
+                            class="clickable-sentence"
+                            :class="[
+                                evidenceClass(sentence, currentReviewSet.results),
+                                { 'selected-sentence': selectedSentence === sentence }
+                            ]"
+                            :disabled="detailedExplanationLoading || (detailedExplanationUsed && selectedSentence !== sentence)"
+                            @click="requestDetailedExplanation(currentReviewSet.question_set_id, sentence)"
+                        >{{ sentence }}</button>
+                        <button class="btn btn-outline-secondary btn-sm mt-3" @click="toggleTranslation(currentReviewSet.question_set_id)">
+                            {{ isTranslationOpen(currentReviewSet.question_set_id) ? '日本語訳を閉じる' : '日本語訳を表示' }}
+                        </button>
+                        <div v-if="isTranslationOpen(currentReviewSet.question_set_id)" class="border rounded bg-light p-3 mt-2">
+                            <p class="fw-bold mb-2">日本語訳</p>{{ currentReviewSet.passage_translation }}
+                        </div>
+                </div>
+                <p v-if="currentReviewSet" class="small evidence-note mb-3">
+                    <span class="badge text-dark evidence-q1">Question 1の根拠</span>
+                    <span class="badge text-dark evidence-q2 ms-1">Question 2の根拠</span>
+                    <span class="d-block mt-2">色が付いた文が、それぞれの正解を判断する手掛かりです。</span>
+                </p>
+                <div v-for="item in currentReviewResults" :key="item.question_set_id + item.question_id" class="explanation rounded p-3 mb-3">
+                    <p class="fw-bold mb-1" :class="item.correct ? 'text-success' : 'text-danger'">
+                        セット{{ item.set_number }}・{{ item.question_id }}：{{ item.correct ? '正解' : '不正解' }}
+                    </p>
+                    <p class="mb-1">問題：{{ item.question }}</p>
+                    <p class="mb-2">あなたの回答：{{ selectedAnswerText(item) }}</p>
+                    <div class="mt-3">
+                        <p class="mb-1">正解：{{ item.choices[item.correct_choice] }}</p>
+                        <p class="mb-1"><strong>本文中の根拠：</strong>{{ item.evidence }}</p>
+                        <p class="mb-2">解説：{{ item.explanation }}</p>
+                        <button class="btn btn-link btn-sm p-0" @click="scrollToEvidence('ta-passage-' + currentReviewSet.question_set_id)">本文の根拠を見る</button>
+                    </div>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mt-4">
+                    <button class="btn btn-outline-secondary" @click="previousReviewSet" :disabled="reviewSetIndex === 0">
+                        前の解説へ
+                    </button>
+                    <strong>セット {{ reviewSetIndex + 1 }} / {{ timeAttackReviewSets.length }}</strong>
+                    <button class="btn btn-primary" @click="nextReviewSet" :disabled="reviewSetIndex >= timeAttackReviewSets.length - 1">
+                        次の解説へ
+                    </button>
+                </div>
+                <div class="mt-3 text-end">
+                    <button class="btn btn-outline-danger" @click="startTimeAttack">もう一度挑戦する</button>
+                </div>
+            </section>
+
+            </template>
+
+            <div v-if="detailConfirmationOpen" class="detail-modal-backdrop" @click.self="cancelDetailedExplanation">
+                <div class="detail-modal card shadow-lg border-warning">
+                    <div class="card-body p-4">
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <h2 class="h5 mb-0">詳細説明を生成しますか？</h2>
+                            <button class="modal-close" type="button" aria-label="閉じる" @click="cancelDetailedExplanation">×</button>
+                        </div>
+                        <p>次の英文について、文法・重要単語・フレーズをAIが説明します。</p>
+                        <p class="selected-sentence rounded p-2">{{ pendingSentence }}</p>
+                        <div class="alert alert-warning">詳細説明を生成できるのは、この挑戦で1度だけです。</div>
+                        <div class="d-flex justify-content-end gap-2">
+                            <button class="btn btn-outline-secondary" @click="cancelDetailedExplanation">キャンセル</button>
+                            <button class="btn btn-primary" @click="confirmDetailedExplanation">この文を説明する</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="detailModalOpen" class="detail-modal-backdrop" @click.self="closeDetailModal">
+                <div class="detail-modal card shadow-lg border-info">
+                    <div class="card-body p-4">
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <h2 class="h5 mb-0">選択した英文の詳細説明</h2>
+                            <button class="modal-close" type="button" aria-label="閉じる" @click="closeDetailModal">×</button>
+                        </div>
+                        <div v-if="detailedExplanationLoading" class="alert alert-info">文法・フレーズを説明しています。</div>
+                        <div v-if="detailedExplanationError" class="alert alert-danger">{{ detailedExplanationError }}</div>
+                        <template v-if="detailedExplanation">
+                            <p class="selected-sentence rounded p-2">{{ detailedExplanation.selected_text }}</p>
+                            <div class="passage">{{ detailedExplanation.explanation }}</div>
+                            <p class="small text-muted mt-3 mb-0">詳細説明はこの挑戦では使用済みです。</p>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="rankCelebrationOpen" class="detail-modal-backdrop" @click.self="closeRankCelebration">
+                <div class="rank-celebration">
+                    <div class="p-4 p-md-5 text-center position-relative">
+                        <button class="modal-close position-absolute top-0 end-0 mt-3 me-3" type="button" aria-label="閉じる" @click="closeRankCelebration">×</button>
+                        <div class="rank-medal" aria-hidden="true">★</div>
+                        <p class="feature-number mb-2">RANK UP</p>
+                        <h2 class="h3 fw-bold mb-3">ゴールドランク到達！</h2>
+                        <p class="mb-1">最高ランクへの到達、おめでとうございます。</p>
+                        <p class="text-muted mb-0">積み重ねた正解が、確かな読解力につながっています。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const { createApp } = Vue;
+
+createApp({
+    data() {
+        return {
+            screen: 'home',
+            level: 'beginner',
+            documentFormat: 'email',
+            loading: false,
+            submitting: false,
+            error: '',
+            answerError: '',
+            mode: 'normal',
+            questionSet: null,
+            submission: null,
+            answers: {},
+            timeAttackId: null,
+            currentSet: 0,
+            totalSets: 5,
+            remainingSeconds: 0,
+            timerId: null,
+            timeAttackFinished: false,
+            timeAttackResult: null,
+            reviewSetIndex: 0,
+            revealedQuestionSets: [],
+            answersBySet: {},
+            normalElapsedSeconds: 0,
+            normalTimerId: null,
+            totalAnswers: 0,
+            correctAnswers: 0,
+            sessionAnswers: 0,
+            sessionCorrectAnswers: 0,
+            recordedResultIds: [],
+            showIncorrectOnly: false,
+            openExplanations: {},
+            openTranslations: {},
+            generationController: null,
+            lastGenerationAction: '',
+            detailedExplanation: null,
+            detailedExplanationLoading: false,
+            detailedExplanationError: '',
+            detailedExplanationUsed: false,
+            selectedSentence: '',
+            detailModalOpen: false,
+            detailConfirmationOpen: false,
+            pendingQuestionSetId: '',
+            pendingSentence: '',
+            pendingRankCelebration: false,
+            rankCelebrationOpen: false,
+            scrollRevealObserver: null
+        };
+    },
+    computed: {
+        graded() {
+            return this.submission !== null;
+        },
+        formattedTime() {
+            const minutes = Math.floor(this.remainingSeconds / 60);
+            const seconds = this.remainingSeconds % 60;
+            return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        },
+        formattedNormalTime() {
+            const minutes = Math.floor(this.normalElapsedSeconds / 60);
+            const seconds = this.normalElapsedSeconds % 60;
+            return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        },
+        accuracyRate() {
+            if (this.totalAnswers === 0) {
+                return 0;
             }
-        }).mount('#app');
-    </script>
+            return Math.round((this.correctAnswers / this.totalAnswers) * 100);
+        },
+        sessionRank() {
+            if (this.sessionCorrectAnswers >= 10) {
+                return 'ゴールド';
+            }
+            if (this.sessionCorrectAnswers >= 6) {
+                return 'シルバー';
+            }
+            if (this.sessionCorrectAnswers >= 3) {
+                return 'ブロンズ';
+            }
+            return 'ウォーミングアップ';
+        },
+        nextRankName() {
+            if (this.sessionCorrectAnswers < 3) {
+                return 'ブロンズ';
+            }
+            if (this.sessionCorrectAnswers < 6) {
+                return 'シルバー';
+            }
+            if (this.sessionCorrectAnswers < 10) {
+                return 'ゴールド';
+            }
+            return 'ゴールド';
+        },
+        correctToNextRank() {
+            if (this.sessionCorrectAnswers < 3) {
+                return 3 - this.sessionCorrectAnswers;
+            }
+            if (this.sessionCorrectAnswers < 6) {
+                return 6 - this.sessionCorrectAnswers;
+            }
+            if (this.sessionCorrectAnswers < 10) {
+                return 10 - this.sessionCorrectAnswers;
+            }
+            return 0;
+        },
+        rankProgressRate() {
+            if (this.sessionCorrectAnswers >= 10) {
+                return 100;
+            }
+            if (this.sessionCorrectAnswers >= 6) {
+                return Math.round(((this.sessionCorrectAnswers - 6) / 4) * 100);
+            }
+            if (this.sessionCorrectAnswers >= 3) {
+                return Math.round(((this.sessionCorrectAnswers - 3) / 3) * 100);
+            }
+            return Math.round((this.sessionCorrectAnswers / 3) * 100);
+        },
+        rankProgressText() {
+            if (this.sessionCorrectAnswers >= 10) {
+                return 'MAX';
+            }
+            if (this.sessionCorrectAnswers >= 6) {
+                return `${this.sessionCorrectAnswers - 6}/4`;
+            }
+            if (this.sessionCorrectAnswers >= 3) {
+                return `${this.sessionCorrectAnswers - 3}/3`;
+            }
+            return `${this.sessionCorrectAnswers}/3`;
+        },
+        nextRankMessage() {
+            if (this.sessionCorrectAnswers >= 10) {
+                return '最高ランクに到達しました';
+            }
+            if (this.sessionCorrectAnswers >= 6) {
+                return `ゴールドまであと${10 - this.sessionCorrectAnswers}問正解`;
+            }
+            if (this.sessionCorrectAnswers >= 3) {
+                return `シルバーまであと${6 - this.sessionCorrectAnswers}問正解`;
+            }
+            return `ブロンズまであと${3 - this.sessionCorrectAnswers}問正解`;
+        },
+        visibleNormalQuestions() {
+            if (!this.graded || !this.showIncorrectOnly) {
+                return this.questionSet ? this.questionSet.questions : [];
+            }
+            return this.questionSet.questions.filter(
+                item => !this.resultFor(item.question_id).correct
+            );
+        },
+        timeAttackReviewSets() {
+            if (!this.timeAttackResult) {
+                return [];
+            }
+            const grouped = [];
+            this.timeAttackResult.results.forEach(item => {
+                let set = grouped.find(group => group.question_set_id === item.question_set_id);
+                if (!set) {
+                    set = {
+                        set_number: item.set_number,
+                        question_set_id: item.question_set_id,
+                        format: item.format,
+                        passage: item.passage,
+                        passage_translation: item.passage_translation,
+                        results: []
+                    };
+                    grouped.push(set);
+                }
+                set.results.push(item);
+            });
+            return grouped;
+        },
+        currentReviewSet() {
+            return this.timeAttackReviewSets[this.reviewSetIndex] || null;
+        },
+        currentReviewResults() {
+            if (!this.currentReviewSet) {
+                return [];
+            }
+            return this.showIncorrectOnly
+                ? this.currentReviewSet.results.filter(item => !item.correct)
+                : this.currentReviewSet.results;
+        }
+    },
+    mounted() {
+        this.loadStudyStats();
+        this.loadSessionProgress();
+        this.$nextTick(this.initializeScrollReveal);
+    },
+    beforeUnmount() {
+        this.stopTimer();
+        this.stopNormalTimer();
+        if (this.scrollRevealObserver) {
+            this.scrollRevealObserver.disconnect();
+        }
+    },
+    methods: {
+        async responseData(response) {
+            try {
+                return await response.json();
+            } catch (error) {
+                return {};
+            }
+        },
+        errorMessageForResponse(status, fallback) {
+            const messages = {
+                400: '送信内容が正しくありません。入力内容を確認してください。',
+                401: '現在AI機能を利用できません。管理者にお問い合わせください。',
+                403: '現在AI機能を利用できません。管理者にお問い合わせください。',
+                404: '対象の問題が見つかりません。ホーム画面からやり直してください。',
+                409: 'この問題はすでに処理されています。画面を更新してやり直してください。',
+                413: '送信するデータが大きすぎます。',
+                422: '送信内容が条件を満たしていません。回答内容を確認してください。',
+                429: 'AIの利用上限に達しました。しばらくしてからお試しください。',
+                500: 'サーバーで問題が発生しました。もう一度お試しください。',
+                502: 'AIが正しい形式の内容を生成できませんでした。もう一度お試しください。',
+                503: '現在サービスを利用できません。しばらくしてからお試しください。',
+                504: 'AIの応答に時間がかかっています。しばらくしてからお試しください。'
+            };
+            return `${messages[status] || fallback || '予期しないエラーが発生しました。'}（エラー ${status}）`;
+        },
+        clientErrorMessage(error, fallback) {
+            if (error && error.name === 'AbortError') {
+                return '';
+            }
+            if (error && /（エラー \d+）$/.test(error.message || '')) {
+                return error.message;
+            }
+            return `${fallback || 'サーバーに接続できません。'} 通信環境とサーバーの起動状態を確認してください。（通信エラー）`;
+        },
+        scrollToSection(sectionId) {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        },
+        initializeScrollReveal() {
+            if (this.scrollRevealObserver) {
+                this.scrollRevealObserver.disconnect();
+            }
+            this.scrollRevealObserver = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    entry.target.classList.toggle('is-visible', entry.isIntersecting);
+                });
+            }, {
+                threshold: 0.18
+            });
+            document.querySelectorAll('.scroll-reveal').forEach(element => {
+                this.scrollRevealObserver.observe(element);
+            });
+        },
+        resetDetailedExplanation() {
+            this.detailedExplanation = null;
+            this.detailedExplanationLoading = false;
+            this.detailedExplanationError = '';
+            this.detailedExplanationUsed = false;
+            this.selectedSentence = '';
+            this.detailModalOpen = false;
+            this.detailConfirmationOpen = false;
+            this.pendingQuestionSetId = '';
+            this.pendingSentence = '';
+        },
+        openNormalSetup() {
+            this.screen = 'setup';
+            this.mode = 'normal';
+            this.error = '';
+            this.lastGenerationAction = '';
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        },
+        goHome() {
+            const shouldCelebrate = this.mode === 'normal'
+                && this.graded
+                && this.pendingRankCelebration;
+            this.cancelGeneration(false);
+            this.stopTimer();
+            this.stopNormalTimer();
+            this.screen = 'home';
+            this.questionSet = null;
+            this.submission = null;
+            this.timeAttackResult = null;
+            this.error = '';
+            this.answerError = '';
+            this.showIncorrectOnly = false;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            this.$nextTick(() => {
+                this.initializeScrollReveal();
+                if (shouldCelebrate) {
+                    this.openRankCelebration();
+                }
+            });
+        },
+        async goToNextQuestion() {
+            const shouldCelebrate = this.mode === 'normal'
+                && this.graded
+                && this.pendingRankCelebration;
+            await this.generateQuestionSet();
+            if (shouldCelebrate && this.questionSet && !this.error) {
+                this.openRankCelebration();
+            }
+        },
+        openRankCelebration() {
+            this.pendingRankCelebration = false;
+            this.rankCelebrationOpen = true;
+        },
+        closeRankCelebration() {
+            this.rankCelebrationOpen = false;
+        },
+        toggleExplanation(key) {
+            this.openExplanations[key] = !this.openExplanations[key];
+        },
+        isExplanationOpen(key) {
+            return Boolean(this.openExplanations[key]);
+        },
+        toggleTranslation(key) {
+            this.openTranslations[key] = !this.openTranslations[key];
+        },
+        isTranslationOpen(key) {
+            return Boolean(this.openTranslations[key]);
+        },
+        questionNumber(questionId) {
+            return questionId === 'q1' ? 1 : 2;
+        },
+        formatLabel(format) {
+            return {
+                email: 'メール',
+                notice: 'お知らせ',
+                advertisement: '広告',
+                article: '記事'
+            }[format] || format;
+        },
+        previousReviewSet() {
+            if (this.reviewSetIndex > 0) {
+                this.reviewSetIndex -= 1;
+            }
+        },
+        nextReviewSet() {
+            if (this.reviewSetIndex < this.timeAttackReviewSets.length - 1) {
+                this.reviewSetIndex += 1;
+            }
+        },
+        shouldShowTimeAttackPassage(item) {
+            return this.currentReviewSet && this.currentReviewSet.question_set_id === item.question_set_id;
+        },
+        scrollToEvidence(elementId) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        },
+        closeDetailModal() {
+            this.detailModalOpen = false;
+        },
+        passageSentences(passage) {
+            if (!passage) {
+                return [];
+            }
+            return passage
+                .split(/\n+/)
+                .flatMap(line => line.match(/[^.!?]+(?:[.!?]+|$)/g) || [])
+                .map(sentence => sentence.trim())
+                .filter(Boolean);
+        },
+        evidenceClass(sentence, results) {
+            if (!Array.isArray(results)) {
+                return '';
+            }
+            const matches = results
+                .filter(result => result.evidence && sentence.includes(result.evidence))
+                .map(result => result.question_id);
+            if (matches.includes('q1') && matches.includes('q2')) {
+                return 'evidence-both';
+            }
+            if (matches.includes('q1')) {
+                return 'evidence-q1';
+            }
+            if (matches.includes('q2')) {
+                return 'evidence-q2';
+            }
+            return '';
+        },
+        evidenceResultsFor(questionSetId) {
+            if (!this.timeAttackResult) {
+                return [];
+            }
+            return this.timeAttackResult.results.filter(
+                result => result.question_set_id === questionSetId
+            );
+        },
+        startNormalTimer() {
+            this.stopNormalTimer();
+            this.normalElapsedSeconds = 0;
+            this.normalTimerId = setInterval(() => {
+                this.normalElapsedSeconds += 1;
+            }, 1000);
+        },
+        stopNormalTimer() {
+            if (this.normalTimerId !== null) {
+                clearInterval(this.normalTimerId);
+                this.normalTimerId = null;
+            }
+        },
+        loadStudyStats() {
+            try {
+                const saved = JSON.parse(sessionStorage.getItem('englishReadingStats') || '{}');
+                this.totalAnswers = Number.isInteger(saved.totalAnswers) ? saved.totalAnswers : 0;
+                this.correctAnswers = Number.isInteger(saved.correctAnswers) ? saved.correctAnswers : 0;
+            } catch (error) {
+                this.totalAnswers = 0;
+                this.correctAnswers = 0;
+            }
+        },
+        loadSessionProgress() {
+            try {
+                const saved = JSON.parse(sessionStorage.getItem('englishReadingSession') || '{}');
+                this.sessionAnswers = Number.isInteger(saved.sessionAnswers) ? saved.sessionAnswers : 0;
+                this.sessionCorrectAnswers = Number.isInteger(saved.sessionCorrectAnswers)
+                    ? saved.sessionCorrectAnswers
+                    : 0;
+            } catch (error) {
+                this.sessionAnswers = 0;
+                this.sessionCorrectAnswers = 0;
+            }
+        },
+        recordStudyStats(score, total, resultId) {
+            if (!resultId || this.recordedResultIds.includes(resultId)) {
+                return;
+            }
+            const correctBeforeRecording = this.sessionCorrectAnswers;
+            this.recordedResultIds.push(resultId);
+            this.totalAnswers += total;
+            this.correctAnswers += score;
+            this.sessionAnswers += total;
+            this.sessionCorrectAnswers += score;
+            if (
+                resultId.startsWith('submission:')
+                && correctBeforeRecording < 10
+                && this.sessionCorrectAnswers >= 10
+            ) {
+                this.pendingRankCelebration = true;
+            }
+            try {
+                sessionStorage.setItem('englishReadingStats', JSON.stringify({
+                    totalAnswers: this.totalAnswers,
+                    correctAnswers: this.correctAnswers
+                }));
+            } catch (error) {
+                console.warn('学習成績をブラウザへ保存できませんでした。', error);
+            }
+            try {
+                sessionStorage.setItem('englishReadingSession', JSON.stringify({
+                    sessionAnswers: this.sessionAnswers,
+                    sessionCorrectAnswers: this.sessionCorrectAnswers
+                }));
+            } catch (error) {
+                console.warn('今回の学習ランクをブラウザへ保存できませんでした。', error);
+            }
+        },
+        requestDetailedExplanation(questionSetId, sentence) {
+            if (this.detailedExplanationLoading) {
+                return;
+            }
+
+            if (this.detailedExplanationUsed) {
+                if (this.detailedExplanation && this.selectedSentence === sentence) {
+                    this.detailModalOpen = true;
+                }
+                return;
+            }
+
+            this.pendingQuestionSetId = questionSetId;
+            this.pendingSentence = sentence;
+            this.detailConfirmationOpen = true;
+        },
+        cancelDetailedExplanation() {
+            this.detailConfirmationOpen = false;
+            this.pendingQuestionSetId = '';
+            this.pendingSentence = '';
+        },
+        async confirmDetailedExplanation() {
+            if (!this.pendingQuestionSetId || !this.pendingSentence) {
+                return;
+            }
+
+            const questionSetId = this.pendingQuestionSetId;
+            const sentence = this.pendingSentence;
+            this.detailConfirmationOpen = false;
+            this.pendingQuestionSetId = '';
+            this.pendingSentence = '';
+            this.selectedSentence = sentence;
+            this.detailModalOpen = true;
+            this.detailedExplanationLoading = true;
+            this.detailedExplanationError = '';
+            try {
+                const response = await fetch(
+                    `/api/v1/question-sets/${questionSetId}/explanations`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ selected_text: sentence })
+                    }
+                );
+                const data = await this.responseData(response);
+                if (!response.ok) {
+                    throw new Error(this.errorMessageForResponse(response.status, '詳細説明の生成に失敗しました。'));
+                }
+                this.detailedExplanation = data;
+                this.detailedExplanationUsed = true;
+            } catch (error) {
+                this.detailedExplanationError = this.clientErrorMessage(error, '詳細説明の生成に失敗しました。');
+                this.selectedSentence = '';
+            } finally {
+                this.detailedExplanationLoading = false;
+            }
+        },
+        async generateQuestionSet() {
+            this.stopTimer();
+            this.stopNormalTimer();
+            this.resetDetailedExplanation();
+            this.screen = 'study';
+            this.mode = 'normal';
+            this.loading = true;
+            this.error = '';
+            this.answerError = '';
+            this.questionSet = null;
+            this.submission = null;
+            this.answers = {};
+            this.timeAttackFinished = false;
+            this.timeAttackResult = null;
+            this.reviewSetIndex = 0;
+            this.revealedQuestionSets = [];
+            this.answersBySet = {};
+            this.showIncorrectOnly = false;
+            this.openExplanations = {};
+            this.openTranslations = {};
+            this.lastGenerationAction = 'normal';
+            const controller = new AbortController();
+            this.generationController = controller;
+
+            try {
+                const response = await fetch('/api/v1/question-sets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                        level: this.level,
+                        format: this.documentFormat
+                    })
+                });
+                const data = await this.responseData(response);
+                if (!response.ok) {
+                    throw new Error(this.errorMessageForResponse(response.status, '問題の生成に失敗しました。'));
+                }
+                this.questionSet = data;
+                this.startNormalTimer();
+            } catch (error) {
+                this.error = this.clientErrorMessage(error, '問題の生成に失敗しました。');
+            } finally {
+                if (this.generationController === controller) {
+                    this.generationController = null;
+                }
+                this.loading = false;
+            }
+        },
+        async startTimeAttack() {
+            this.stopTimer();
+            this.stopNormalTimer();
+            this.resetDetailedExplanation();
+            this.screen = 'study';
+            this.mode = 'time_attack';
+            this.loading = true;
+            this.error = '';
+            this.answerError = '';
+            this.questionSet = null;
+            this.submission = null;
+            this.answers = {};
+            this.timeAttackId = null;
+            this.currentSet = 0;
+            this.timeAttackFinished = false;
+            this.timeAttackResult = null;
+            this.revealedQuestionSets = [];
+            this.answersBySet = {};
+            this.showIncorrectOnly = false;
+            this.openExplanations = {};
+            this.openTranslations = {};
+            this.lastGenerationAction = 'time_attack';
+            const controller = new AbortController();
+            this.generationController = controller;
+
+            try {
+                const response = await fetch('/api/v1/time-attacks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
+                    body: JSON.stringify({ level: 'intermediate', format: 'random' })
+                });
+                const data = await this.responseData(response);
+                if (!response.ok) {
+                    throw new Error(this.errorMessageForResponse(response.status, 'タイムアタックの準備に失敗しました。'));
+                }
+                this.timeAttackId = data.time_attack_id;
+                this.currentSet = data.current_set;
+                this.totalSets = data.total_sets;
+                this.remainingSeconds = data.time_limit_seconds;
+                this.questionSet = data.question_set;
+                this.revealedQuestionSets = [data.question_set];
+                this.startTimer();
+            } catch (error) {
+                this.error = this.clientErrorMessage(error, 'タイムアタックの準備に失敗しました。');
+            } finally {
+                if (this.generationController === controller) {
+                    this.generationController = null;
+                }
+                this.loading = false;
+            }
+        },
+        cancelGeneration(showMessage = false) {
+            const cancelledAction = this.lastGenerationAction;
+            if (this.generationController) {
+                this.generationController.abort();
+                this.generationController = null;
+            }
+            this.loading = false;
+            if (showMessage) {
+                this.error = '問題生成をキャンセルしました。';
+                return;
+            }
+
+            this.error = '';
+            this.answerError = '';
+            this.questionSet = null;
+            if (cancelledAction === 'normal') {
+                this.screen = 'setup';
+            } else if (cancelledAction === 'time_attack') {
+                this.screen = 'home';
+                this.timeAttackId = null;
+                this.currentSet = 0;
+                this.revealedQuestionSets = [];
+                this.answersBySet = {};
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                this.$nextTick(this.initializeScrollReveal);
+            }
+        },
+        retryLastGeneration() {
+            if (this.lastGenerationAction === 'time_attack') {
+                this.startTimeAttack();
+            } else if (this.lastGenerationAction === 'normal') {
+                this.generateQuestionSet();
+            }
+        },
+        startTimer() {
+            this.stopTimer();
+            this.timerId = setInterval(() => {
+                this.remainingSeconds -= 1;
+                if (this.remainingSeconds <= 0) {
+                    this.remainingSeconds = 0;
+                    this.stopTimer();
+                    this.finishTimeAttack();
+                }
+            }, 1000);
+        },
+        stopTimer() {
+            if (this.timerId !== null) {
+                clearInterval(this.timerId);
+                this.timerId = null;
+            }
+        },
+        currentTimeAttackAnswers(includeUnanswered = false) {
+            return this.questionSet.questions
+                .filter(item => includeUnanswered || this.answers[item.question_id] !== undefined)
+                .map(item => ({
+                    question_id: item.question_id,
+                    selected_choice: this.answers[item.question_id] === undefined
+                        ? null
+                        : Number(this.answers[item.question_id])
+                }));
+        },
+        saveCurrentAnswers() {
+            if (this.questionSet) {
+                this.answersBySet[this.questionSet.question_set_id] = { ...this.answers };
+            }
+        },
+        loadTimeAttackSet(setNumber) {
+            this.currentSet = setNumber;
+            this.questionSet = this.revealedQuestionSets[setNumber - 1];
+            this.answers = {
+                ...(this.answersBySet[this.questionSet.question_set_id] || {})
+            };
+            this.answerError = '';
+        },
+        showPreviousSet() {
+            if (this.currentSet <= 1) {
+                return;
+            }
+            this.saveCurrentAnswers();
+            this.loadTimeAttackSet(this.currentSet - 1);
+        },
+        async submitTimeAttackSet() {
+            const allAnswered = this.questionSet.questions.every(
+                item => this.answers[item.question_id] !== undefined
+            );
+            if (!allAnswered) {
+                this.answerError = '2問すべてに回答してください。';
+                return;
+            }
+
+            this.submitting = true;
+            this.error = '';
+            this.answerError = '';
+            this.saveCurrentAnswers();
+            try {
+                const response = await fetch(
+                    `/api/v1/time-attacks/${this.timeAttackId}/answers`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            question_set_id: this.questionSet.question_set_id,
+                            answers: this.currentTimeAttackAnswers()
+                        })
+                    }
+                );
+                const data = await this.responseData(response);
+                if (!response.ok) {
+                    throw new Error(this.errorMessageForResponse(response.status, '回答の送信に失敗しました。'));
+                }
+                if (data.finished) {
+                    this.showTimeAttackResult(data.result);
+                } else if (data.updated) {
+                    this.loadTimeAttackSet(this.currentSet + 1);
+                } else {
+                    this.revealedQuestionSets.push(data.question_set);
+                    this.loadTimeAttackSet(data.current_set);
+                }
+            } catch (error) {
+                this.error = this.clientErrorMessage(error, '回答の送信に失敗しました。');
+            } finally {
+                this.submitting = false;
+            }
+        },
+        async finishTimeAttack() {
+            if (this.timeAttackFinished || !this.timeAttackId || !this.questionSet) {
+                return;
+            }
+            this.timeAttackFinished = true;
+            this.submitting = true;
+            this.error = '';
+            this.saveCurrentAnswers();
+            const answerSets = this.revealedQuestionSets.map(questionSet => {
+                const savedAnswers = this.answersBySet[questionSet.question_set_id] || {};
+                return {
+                    question_set_id: questionSet.question_set_id,
+                    answers: questionSet.questions.map(item => ({
+                        question_id: item.question_id,
+                        selected_choice: savedAnswers[item.question_id] === undefined
+                            ? null
+                            : Number(savedAnswers[item.question_id])
+                    }))
+                };
+            });
+            try {
+                const response = await fetch(
+                    `/api/v1/time-attacks/${this.timeAttackId}/finish`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            answer_sets: answerSets
+                        })
+                    }
+                );
+                const data = await this.responseData(response);
+                if (!response.ok) {
+                    throw new Error(this.errorMessageForResponse(response.status, '時間切れ後の採点に失敗しました。'));
+                }
+                this.showTimeAttackResult(data);
+            } catch (error) {
+                this.error = this.clientErrorMessage(error, '時間切れ後の採点に失敗しました。');
+            } finally {
+                this.submitting = false;
+            }
+        },
+        showTimeAttackResult(result) {
+            this.stopTimer();
+            this.timeAttackFinished = true;
+            this.timeAttackResult = result;
+            this.reviewSetIndex = 0;
+            this.openExplanations = Object.fromEntries(
+                result.results.map(item => [
+                    `ta-${item.question_set_id}-${item.question_id}`,
+                    true
+                ])
+            );
+            this.recordStudyStats(
+                result.score,
+                result.total,
+                `time_attack:${result.time_attack_id}`
+            );
+        },
+        async submitAnswers() {
+            const allAnswered = this.questionSet.questions.every(
+                item => this.answers[item.question_id] !== undefined
+            );
+            if (!allAnswered) {
+                this.answerError = '2問すべてに回答してください。';
+                return;
+            }
+
+            this.submitting = true;
+            this.error = '';
+            this.answerError = '';
+
+            const answers = this.questionSet.questions.map(item => ({
+                question_id: item.question_id,
+                selected_choice: Number(this.answers[item.question_id])
+            }));
+
+            try {
+                const response = await fetch(
+                    `/api/v1/question-sets/${this.questionSet.question_set_id}/submissions`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ answers })
+                    }
+                );
+                const data = await this.responseData(response);
+                if (!response.ok) {
+                    throw new Error(this.errorMessageForResponse(response.status, '採点に失敗しました。'));
+                }
+                this.submission = data;
+                this.openExplanations = {
+                    'normal-q1': true,
+                    'normal-q2': true
+                };
+                this.stopNormalTimer();
+                this.recordStudyStats(
+                    data.score,
+                    data.total,
+                    `submission:${data.submission_id}`
+                );
+            } catch (error) {
+                this.error = this.clientErrorMessage(error, '採点に失敗しました。');
+            } finally {
+                this.submitting = false;
+            }
+        },
+        resultFor(questionId) {
+            return this.submission.results.find(result => result.question_id === questionId);
+        },
+        selectedAnswerText(item) {
+            return item.selected_choice === null ? '未回答' : item.choices[item.selected_choice];
+        }
+    }
+}).mount('#app');
+</script>
 </body>
 </html>
