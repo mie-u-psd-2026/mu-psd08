@@ -14,6 +14,10 @@ from flask import Flask, jsonify, request, send_from_directory
 from openai import OpenAI
 
 
+# -----------------------------------------------------------------------------
+# アプリケーション初期化・LLM接続設定
+# .envから実行環境を読み込み、Gemini/Ollamaの接続先とモデルを選択する。
+# -----------------------------------------------------------------------------
 load_dotenv()
 
 app = Flask(__name__)
@@ -25,6 +29,11 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:0.5b")
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
+
+# -----------------------------------------------------------------------------
+# インメモリRepositoryと排他制御
+# 問題、提出結果、タイムアタック、詳細説明をDBの代わりに一時保存する。
+# -----------------------------------------------------------------------------
 # MVPではDBを使わず、問題と提出結果をメモリに一時保存する。
 # サーバーを終了すると内容は消える。
 question_sets = {}
@@ -37,6 +46,11 @@ rate_limit_lock = Lock()
 cleanup_lock = Lock()
 last_cleanup_at = 0.0
 
+
+# -----------------------------------------------------------------------------
+# アプリケーション設定値
+# 出題数、制限時間、生成品質、レート制限、一時データの寿命をまとめて管理する。
+# -----------------------------------------------------------------------------
 TIME_ATTACK_SET_COUNT = 5
 TIME_ATTACK_TIME_LIMIT_SECONDS = 600
 GENERATION_MAX_ATTEMPTS = 3
@@ -64,6 +78,10 @@ PROCESSING_EXPLANATION_TTL_SECONDS = 10 * 60
 CLEANUP_INTERVAL_SECONDS = 60
 
 
+# -----------------------------------------------------------------------------
+# 画面配信・共通エラーレスポンス
+# APIエラーはapplication/problem+json形式に統一する。
+# -----------------------------------------------------------------------------
 @app.route("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
@@ -96,6 +114,10 @@ def rate_limit_response(retry_after):
     return response
 
 
+# -----------------------------------------------------------------------------
+# アクセス制限・期限切れデータの削除
+# 同一IPからの連続操作を抑止し、不要になったメモリ上のデータを定期削除する。
+# -----------------------------------------------------------------------------
 def exceeds_rate_limit(client_ip, category, limit, now):
     """同一IP・同一カテゴリの直近1分間のリクエスト数を検査する。"""
     key = (client_ip, category)
@@ -220,6 +242,10 @@ def limit_api_requests():
     return None
 
 
+# -----------------------------------------------------------------------------
+# LLMクライアント生成
+# 選択されたプロバイダに対応するOpenAI互換クライアントを返す。
+# -----------------------------------------------------------------------------
 def get_llm_client():
     """環境変数に応じたLLMクライアントとモデル名を返す。"""
     if LLM_PROVIDER == "gemini":
@@ -247,6 +273,10 @@ def get_llm_client():
     raise RuntimeError("LLM_PROVIDER must be gemini or ollama")
 
 
+# -----------------------------------------------------------------------------
+# AI生成結果の解析・品質検証
+# JSON構造、英文語数、文字数、日本語、設問数、選択肢、根拠の整合性を検査する。
+# -----------------------------------------------------------------------------
 def extract_json(text):
     text = (text or "").strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -389,6 +419,11 @@ def validate_generated_question_set(data):
         "questions": normalized_questions,
     }
 
+
+# -----------------------------------------------------------------------------
+# 難易度・文章形式別のプロンプト定義
+# フロントから受け取った選択内容を、具体的な生成条件へ変換する。
+# -----------------------------------------------------------------------------
 LEVEL_INSTRUCTIONS = {
     "beginner": (
         "Use common everyday and business vocabulary. "
@@ -413,6 +448,7 @@ FORMAT_INSTRUCTIONS = {
     "advertisement": "Write a realistic advertisement describing a product, service, event, or offer.",
     "article": "Write a short informational article with a title and logically organized paragraphs.",
 }
+
 
 def create_prompt(
     level,
@@ -492,6 +528,10 @@ Required JSON structure:
 """
 
 
+# -----------------------------------------------------------------------------
+# 問題生成と再試行
+# LLM出力が検証を通らない場合、理由を次のプロンプトへ渡して再生成する。
+# -----------------------------------------------------------------------------
 def generate_question_set_with_llm(level, document_format, previous_passages=None):
     """LLMで1つの英文と2問を生成し、形式不正時は再生成する。"""
     client, model = get_llm_client()
@@ -535,6 +575,10 @@ def generate_question_set_with_llm(level, document_format, previous_passages=Non
     raise last_error
 
 
+# -----------------------------------------------------------------------------
+# タイムアタック用の重複・類似判定
+# 5パッセージの内容や設問が似すぎないよう、正規化した文章同士を比較する。
+# -----------------------------------------------------------------------------
 def normalized_similarity_text(text):
     """大文字小文字や記号の違いを除いて類似度を比較できる形にする。"""
     return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
@@ -619,6 +663,10 @@ def generate_distinct_time_attack_set(level, document_format, generated_sets):
     raise last_error
 
 
+# -----------------------------------------------------------------------------
+# 公開用レスポンスとLLMエラー変換
+# 採点前は正解情報を隠し、内部例外を利用者向けのHTTPエラーへ変換する。
+# -----------------------------------------------------------------------------
 def public_question_set(question_set):
     """正解・根拠・解説を除いた、画面表示用の問題セットを返す。"""
     return {
@@ -661,6 +709,10 @@ def llm_error_response(error):
     return problem(500, "Internal Server Error", "予期しないエラーが発生しました。")
 
 
+# -----------------------------------------------------------------------------
+# 通常学習API
+# 問題セットの生成と、2問分の回答の検証・採点を担当する。
+# -----------------------------------------------------------------------------
 @app.route("/api/v1/question-sets", methods=["POST"])
 def create_question_set():
     if not request.is_json:
@@ -790,6 +842,10 @@ def create_submission(question_set_id):
     return jsonify(submission), 201
 
 
+# -----------------------------------------------------------------------------
+# 詳細説明API
+# 1パッセージ1回の利用制限と、request_idによる生成・キャンセル競合を管理する。
+# -----------------------------------------------------------------------------
 def find_explanation_target(question_set_id):
     """詳細説明対象と、1回制限に使うキー、採点済みかを返す。"""
     question_set = question_sets.get(question_set_id)
@@ -844,8 +900,12 @@ def create_detailed_explanation(question_set_id):
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return problem(400, "Bad Request", "正しいJSONを送信してください。")
-    if set(data) != {"selected_text"}:
-        return problem(422, "Validation Error", "selected_textだけを送信してください。")
+    if set(data) != {"selected_text", "request_id"}:
+        return problem(
+            422,
+            "Validation Error",
+            "selected_textとrequest_idを送信してください。",
+        )
 
     selected_text = data.get("selected_text")
     if not isinstance(selected_text, str) or not selected_text.strip():
@@ -853,6 +913,13 @@ def create_detailed_explanation(question_set_id):
     selected_text = selected_text.strip()
     if len(selected_text) > 500:
         return problem(422, "Validation Error", "選択できる英文は500文字以内です。")
+
+    request_id = data.get("request_id")
+    if not isinstance(request_id, str) or not request_id.strip():
+        return problem(422, "Validation Error", "request_idを指定してください。")
+    request_id = request_id.strip()
+    if len(request_id) > 100:
+        return problem(422, "Validation Error", "request_idは100文字以内で指定してください。")
 
     with store_lock:
         question_set, usage_key, graded = find_explanation_target(question_set_id)
@@ -868,6 +935,7 @@ def create_detailed_explanation(question_set_id):
         # 同時クリックによる複数回送信を防ぐため、LLM通信前に利用中として確保する。
         detailed_explanations[usage_key] = {
             "status": "processing",
+            "request_id": request_id,
             "created_at": time.monotonic(),
         }
 
@@ -901,7 +969,11 @@ def create_detailed_explanation(question_set_id):
     except Exception as error:
         # 生成に失敗した場合は「1回」を消費せず、再試行を許可する。
         with store_lock:
-            if detailed_explanations.get(usage_key, {}).get("status") == "processing":
+            current = detailed_explanations.get(usage_key, {})
+            if (
+                current.get("status") == "processing"
+                and current.get("request_id") == request_id
+            ):
                 detailed_explanations.pop(usage_key, None)
 
         if isinstance(error, openai.APITimeoutError):
@@ -931,8 +1003,17 @@ def create_detailed_explanation(question_set_id):
         "remaining_uses": 0,
     }
     with store_lock:
+        current = detailed_explanations.get(usage_key, {})
+        if (
+            current.get("status") != "processing"
+            or current.get("request_id") != request_id
+        ):
+            # 生成中にキャンセルされた結果は保存しない。
+            return problem(409, "Conflict", "詳細説明の生成はキャンセルされました。")
+
         detailed_explanations[usage_key] = {
             "status": "completed",
+            "request_id": request_id,
             "created_at": time.monotonic(),
             **result,
         }
@@ -940,6 +1021,53 @@ def create_detailed_explanation(question_set_id):
     return jsonify(result), 201
 
 
+@app.route(
+    "/api/v1/question-sets/<question_set_id>/explanations/cancel",
+    methods=["POST"],
+)
+def cancel_detailed_explanation(question_set_id):
+    """生成中の詳細説明を取り消す。
+
+    LLM通信自体が終了しても、キャンセル済みの結果は保存しない。
+    レート制限のカウントは元の生成要求時のまま維持する。
+    """
+    if not request.is_json:
+        return problem(400, "Bad Request", "Content-Typeをapplication/jsonにしてください。")
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return problem(400, "Bad Request", "正しいJSONを送信してください。")
+    if set(data) != {"request_id"}:
+        return problem(422, "Validation Error", "request_idだけを送信してください。")
+
+    request_id = data.get("request_id")
+    if not isinstance(request_id, str) or not request_id.strip():
+        return problem(422, "Validation Error", "request_idを指定してください。")
+    request_id = request_id.strip()
+
+    with store_lock:
+        question_set, usage_key, _ = find_explanation_target(question_set_id)
+        if not question_set:
+            return problem(404, "Not Found", "指定された問題セットが存在しません。")
+
+        current = detailed_explanations.get(usage_key)
+        if not current:
+            return ("", 204)
+        if current.get("status") == "completed":
+            return problem(409, "Conflict", "生成済みの詳細説明は取り消せません。")
+        if current.get("request_id") != request_id:
+            return problem(409, "Conflict", "別の詳細説明が生成中です。")
+
+        # 先に予約を解除し、すぐに再生成できるようにする。
+        detailed_explanations.pop(usage_key, None)
+
+    return ("", 204)
+
+
+# -----------------------------------------------------------------------------
+# タイムアタックの回答検証・採点
+# 未回答を含む終了処理にも対応し、全5パッセージ・10問の結果を組み立てる。
+# -----------------------------------------------------------------------------
 def validate_time_attack_answers(question_set, answers, allow_unanswered=False):
     """タイムアタックの現在セットに対する回答を検証する。"""
     if not isinstance(answers, list) or len(answers) > 2:
@@ -1018,6 +1146,11 @@ def time_attack_result(time_attack, timed_out):
     return result
 
 
+# -----------------------------------------------------------------------------
+# タイムアタックAPI
+# 5セット生成、回答保存、時間切れ・手動終了までの状態をサーバー側で管理する。
+# 状態確認と更新を同じロック内で行い、二重提出などの競合を防止する。
+# -----------------------------------------------------------------------------
 @app.route("/api/v1/time-attacks", methods=["POST"])
 def create_time_attack():
     """中級2問の問題セットを5つ、複数の文章形式で生成する。"""
@@ -1192,5 +1325,9 @@ def finish_time_attack(time_attack_id):
     return jsonify(result), 200
 
 
+# -----------------------------------------------------------------------------
+# 開発サーバー起動
+# デバッグモードは環境変数FLASK_DEBUGで明示的に切り替える。
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     app.run(debug=DEBUG, host="0.0.0.0", port=5000)
