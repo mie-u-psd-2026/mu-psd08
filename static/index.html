@@ -8,6 +8,7 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css">
     <style>
+        /* ===== 全体レイアウトと学習条件選択 ===== */
         body { background: #e8f1fb; }
         .app-card { max-width: 900px; margin: 32px auto; }
         .app-card > .card:not(.hero) {
@@ -61,6 +62,7 @@
         }
         .option-card input { margin: 0; accent-color: #0d6efd; }
         .setup-start { min-width: 280px; padding: 13px 30px; font-size: 1.05rem; }
+        /* ===== AI処理中のローディング表示 ===== */
         .loading-overlay {
             position: fixed;
             inset: 0;
@@ -91,6 +93,7 @@
         }
         .loading-title { font-size: 1.7rem; font-weight: 700; letter-spacing: 0.04em; }
         @keyframes loading-spin { to { transform: rotate(360deg); } }
+        /* ===== 英文・根拠ハイライト・解説表示 ===== */
         .passage { white-space: pre-wrap; line-height: 1.8; }
         .choice { display: block; padding: 9px 12px; margin: 7px 0; border: 1px solid #d9dee5; border-radius: 6px; }
         .choice:hover { background: #f8f9fa; }
@@ -138,6 +141,7 @@
             background: transparent;
             box-shadow: none !important;
         }
+        /* ===== ホーム画面とアプリ紹介 ===== */
         .hero-intro {
             min-height: calc(100vh - 112px);
             display: flex;
@@ -212,6 +216,7 @@
         .feature-number { color: #0d6efd; font-size: 0.85rem; font-weight: 700; letter-spacing: 0.08em; }
         .play-step { text-align: left; padding: 18px; border-left: 3px solid #0d6efd; background: #fff; }
         .landing-footer { padding: 30px 20px 12px; color: #6c757d; }
+        /* ===== ホーム画面のナビゲーション ===== */
         .home-menu {
             position: fixed;
             top: 32px;
@@ -301,6 +306,7 @@
                 width: fit-content;
             }
         }
+        /* ===== 詳細説明とランク達成のモーダル ===== */
         .detail-modal-backdrop {
             position: fixed;
             inset: 0;
@@ -311,7 +317,33 @@
             padding: 20px;
             background: rgba(20, 30, 45, 0.62);
         }
-        .detail-modal { width: min(760px, 100%); max-height: 88vh; overflow-y: auto; }
+        .detail-modal { position: relative; width: min(760px, 100%); max-height: 88vh; overflow-y: auto; }
+        .detail-modal-content { transition: filter 160ms ease; }
+        .detail-loading-blur {
+            filter: blur(4px);
+            pointer-events: none;
+            user-select: none;
+        }
+        .detail-loading-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: inherit;
+            background: rgba(255, 255, 255, 0.58);
+            backdrop-filter: blur(2px);
+        }
+        .detail-loading-box {
+            min-width: 300px;
+            padding: 32px 42px;
+            border: 1px solid rgba(169, 191, 220, 0.85);
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.92);
+            box-shadow: 0 14px 34px rgba(69, 96, 132, 0.16);
+            text-align: center;
+        }
         .modal-close { font-size: 1.5rem; line-height: 1; border: 0; background: transparent; }
         .rank-celebration {
             width: min(560px, 100%);
@@ -341,14 +373,16 @@
 </head>
 <body>
 <div id="app" class="container app-card">
+    <!-- AIが問題生成中の間、画面操作を防ぐオーバーレイ -->
     <div v-if="loading" class="loading-overlay" role="status" aria-live="polite">
         <div class="loading-box">
             <div class="loading-spinner" aria-hidden="true"></div>
             <p class="loading-title mb-2">Loading...</p>
-            <p class="text-muted mb-4">AIが問題を作成しています。</p>
+            <p class="text-muted mb-4">AIが問題を生成しています。</p>
             <button class="btn btn-outline-secondary" @click="cancelGeneration(false)">キャンセル</button>
         </div>
     </div>
+    <!-- ABOUTなどの紹介セクションへ移動するホームメニュー -->
     <nav v-if="screen === 'home'" class="home-menu" aria-label="ホームメニュー">
         <button type="button" class="menu-trigger" aria-label="メニューを開く">
             <span></span><span></span><span></span>
@@ -374,6 +408,7 @@
                     <span class="small text-muted">今回の正答率 {{ totalAnswers === 0 ? '―' : accuracyRate + '%' }}</span>
                 </div>
             </div>
+            <!-- ホーム画面：モード選択とアプリの紹介 -->
             <template v-if="screen === 'home'">
                 <div class="hero-intro">
                     <p class="text-primary fw-bold mb-2">NEVER RUN OUT OF TOEIC</p>
@@ -435,6 +470,7 @@
                 </div>
             </template>
 
+            <!-- 学習画面：条件選択、問題、採点、解説 -->
             <template v-else>
             <div class="d-flex justify-content-between align-items-start mb-3">
                 <div>
@@ -484,6 +520,7 @@
                     <span class="badge bg-secondary">経過時間 {{ formattedNormalTime }} ／ 目安 03:00</span>
                 </div>
 
+                <!-- 通常モードの英文表示と根拠ハイライト -->
                 <section class="mb-4">
                     <h2 class="h5">英文</h2>
                     <div id="normal-passage" class="passage border rounded bg-white p-3">
@@ -588,6 +625,7 @@
                 </div>
             </template>
 
+            <!-- タイムアタック終了後の採点結果と復習 -->
             <section v-if="timeAttackResult" class="mt-4">
                 <div v-if="timeAttackResult.timed_out" class="game-over rounded p-3 mb-3">
                     <h2 class="h4 text-danger">時間切れ・ゲームオーバー</h2>
@@ -668,18 +706,30 @@
 
             </template>
 
-            <div v-if="detailConfirmationOpen" class="detail-modal-backdrop" @click.self="cancelDetailedExplanation">
+            <div
+                v-if="detailConfirmationOpen"
+                class="detail-modal-backdrop"
+                @click.self="detailedExplanationLoading ? null : cancelDetailedExplanation()"
+            >
                 <div class="detail-modal card shadow-lg border-warning">
-                    <div class="card-body p-4">
+                    <div v-if="detailedExplanationLoading" class="detail-loading-overlay" role="status" aria-live="polite">
+                        <div class="detail-loading-box">
+                            <div class="loading-spinner mx-auto" aria-hidden="true"></div>
+                            <p class="loading-title mb-2">Loading...</p>
+                            <p class="text-muted mb-4">AIが詳細説明を生成しています。</p>
+                            <button class="btn btn-outline-secondary" @click="cancelDetailedExplanationLoading">キャンセル</button>
+                        </div>
+                    </div>
+                    <div class="card-body p-4 detail-modal-content" :class="{ 'detail-loading-blur': detailedExplanationLoading }">
                         <div class="d-flex justify-content-between align-items-start mb-3">
                             <h2 class="h5 mb-0">詳細説明を生成しますか？</h2>
-                            <button class="modal-close" type="button" aria-label="閉じる" @click="cancelDetailedExplanation">×</button>
+                            <button v-if="!detailedExplanationLoading" class="modal-close" type="button" aria-label="閉じる" @click="cancelDetailedExplanation">×</button>
                         </div>
                         <p>次の英文について、文法・重要単語・フレーズをAIが説明します。</p>
                         <p class="selected-sentence rounded p-2">{{ pendingSentence }}</p>
                         <div class="alert alert-warning">詳細説明を生成できるのは、このパッセージで1度だけです。</div>
+                        <div v-if="detailedExplanationError" class="alert alert-danger">{{ detailedExplanationError }}</div>
                         <div class="d-flex justify-content-end gap-2">
-                            <button class="btn btn-outline-secondary" @click="cancelDetailedExplanation">キャンセル</button>
                             <button class="btn btn-primary" @click="confirmDetailedExplanation">この文を説明する</button>
                         </div>
                     </div>
@@ -693,7 +743,6 @@
                             <h2 class="h5 mb-0">選択した英文の詳細説明</h2>
                             <button class="modal-close" type="button" aria-label="閉じる" @click="closeDetailModal">×</button>
                         </div>
-                        <div v-if="detailedExplanationLoading" class="alert alert-info">文法・フレーズを説明しています。</div>
                         <div v-if="detailedExplanationError" class="alert alert-danger">{{ detailedExplanationError }}</div>
                         <template v-if="detailedExplanation">
                             <p class="selected-sentence rounded p-2">{{ detailedExplanation.selected_text }}</p>
@@ -724,6 +773,7 @@
 const { createApp } = Vue;
 
 createApp({
+    // 画面状態、問題、回答、タイマー、学習進捗を保持する。
     data() {
         return {
             screen: 'home',
@@ -758,6 +808,9 @@ createApp({
             openExplanations: {},
             openTranslations: {},
             generationController: null,
+            detailedExplanationController: null,
+            detailedExplanationRequestId: '',
+            detailedExplanationCancelling: false,
             lastGenerationAction: '',
             detailedExplanation: null,
             detailedExplanationLoading: false,
@@ -774,6 +827,7 @@ createApp({
             scrollRevealObserver: null
         };
     },
+    // 保持中のデータから、得点・ランク・復習対象などを算出する。
     computed: {
         graded() {
             return this.submission !== null;
@@ -908,11 +962,13 @@ createApp({
                 : this.currentReviewSet.results;
         }
     },
+    // 初期表示時にタブ内の学習進捗とスクロール表示を復元する。
     mounted() {
         this.loadStudyStats();
         this.loadSessionProgress();
         this.$nextTick(this.initializeScrollReveal);
     },
+    // 画面廃棄時にタイマーと監視処理を解除する。
     beforeUnmount() {
         this.stopTimer();
         this.stopNormalTimer();
@@ -921,6 +977,7 @@ createApp({
         }
     },
     methods: {
+        // ===== APIレスポンスとエラー表示の共通処理 =====
         async responseData(response) {
             try {
                 return await response.json();
@@ -954,6 +1011,7 @@ createApp({
             }
             return `${fallback || 'サーバーに接続できません。'} 通信環境とサーバーの起動状態を確認してください。（通信エラー）`;
         },
+        // ===== ホーム画面のスクロール表示と画面遷移 =====
         scrollToSection(sectionId) {
             const section = document.getElementById(sectionId);
             if (section) {
@@ -976,6 +1034,12 @@ createApp({
             });
         },
         resetDetailedExplanation() {
+            if (this.detailedExplanationController) {
+                this.detailedExplanationController.abort();
+            }
+            this.detailedExplanationController = null;
+            this.detailedExplanationRequestId = '';
+            this.detailedExplanationCancelling = false;
             this.detailedExplanation = null;
             this.detailedExplanationLoading = false;
             this.detailedExplanationError = '';
@@ -1077,6 +1141,7 @@ createApp({
         closeDetailModal() {
             this.detailModalOpen = false;
         },
+        // ===== 英文の文分割と、設問ごとの根拠ハイライト =====
         passageSentences(passage) {
             if (!passage) {
                 return [];
@@ -1087,12 +1152,32 @@ createApp({
                 .map(sentence => sentence.trim())
                 .filter(Boolean);
         },
+        normalizeEvidenceText(text) {
+            return String(text || '')
+                .normalize('NFKC')
+                .replace(/[“”]/g, '"')
+                .replace(/[‘’]/g, "'")
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+        },
         evidenceClass(sentence, results) {
             if (!Array.isArray(results)) {
                 return '';
             }
+
+            const normalizedSentence = this.normalizeEvidenceText(sentence);
             const matches = results
-                .filter(result => result.evidence && sentence.includes(result.evidence))
+                .filter(result => {
+                    const normalizedEvidence = this.normalizeEvidenceText(result.evidence);
+                    if (!normalizedEvidence) {
+                        return false;
+                    }
+
+                    // 短い語句と複数文の根拠のどちらにも対応する。
+                    return normalizedSentence.includes(normalizedEvidence)
+                        || normalizedEvidence.includes(normalizedSentence);
+                })
                 .map(result => result.question_id);
             if (matches.includes('q1') && matches.includes('q2')) {
                 return 'evidence-both';
@@ -1126,6 +1211,7 @@ createApp({
                 this.normalTimerId = null;
             }
         },
+        // ===== sessionStorageを使った回答数・正答率・ランクの管理 =====
         loadStudyStats() {
             try {
                 const saved = JSON.parse(sessionStorage.getItem('englishReadingStats') || '{}');
@@ -1182,6 +1268,7 @@ createApp({
                 console.warn('今回の学習ランクをブラウザへ保存できませんでした。', error);
             }
         },
+        // ===== 選択した英文の詳細説明と1パッセージ1回の利用制限 =====
         requestDetailedExplanation(questionSetId, sentence) {
             if (this.detailedExplanationLoading) {
                 return;
@@ -1205,6 +1292,52 @@ createApp({
             this.pendingQuestionSetId = '';
             this.pendingSentence = '';
         },
+        async cancelDetailedExplanationLoading() {
+            if (this.detailedExplanationCancelling) {
+                return;
+            }
+
+            const questionSetId = this.pendingQuestionSetId;
+            const requestId = this.detailedExplanationRequestId;
+            this.detailedExplanationCancelling = true;
+
+            try {
+                if (questionSetId && requestId) {
+                    const response = await fetch(
+                        `/api/v1/question-sets/${questionSetId}/explanations/cancel`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ request_id: requestId })
+                        }
+                    );
+                    if (!response.ok) {
+                        throw new Error(this.errorMessageForResponse(response.status, '詳細説明をキャンセルできませんでした。'));
+                    }
+                }
+
+                if (this.detailedExplanationController) {
+                    this.detailedExplanationController.abort();
+                }
+                this.detailedExplanationError = '';
+                this.detailedExplanation = null;
+                this.selectedSentence = '';
+                this.detailConfirmationOpen = false;
+                this.detailModalOpen = false;
+                this.pendingQuestionSetId = '';
+                this.pendingSentence = '';
+                this.detailedExplanationRequestId = '';
+            } catch (error) {
+                this.detailedExplanationError = this.clientErrorMessage(
+                    error,
+                    '詳細説明をキャンセルできませんでした。'
+                );
+            } finally {
+                this.detailedExplanationController = null;
+                this.detailedExplanationLoading = false;
+                this.detailedExplanationCancelling = false;
+            }
+        },
         async confirmDetailedExplanation() {
             if (!this.pendingQuestionSetId || !this.pendingSentence) {
                 return;
@@ -1212,20 +1345,23 @@ createApp({
 
             const questionSetId = this.pendingQuestionSetId;
             const sentence = this.pendingSentence;
-            this.detailConfirmationOpen = false;
-            this.pendingQuestionSetId = '';
-            this.pendingSentence = '';
+            const requestId = crypto.randomUUID();
             this.selectedSentence = sentence;
-            this.detailModalOpen = true;
             this.detailedExplanationLoading = true;
             this.detailedExplanationError = '';
+            this.detailedExplanationRequestId = requestId;
+            this.detailedExplanationController = new AbortController();
             try {
                 const response = await fetch(
                     `/api/v1/question-sets/${questionSetId}/explanations`,
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ selected_text: sentence })
+                        body: JSON.stringify({
+                            selected_text: sentence,
+                            request_id: requestId
+                        }),
+                        signal: this.detailedExplanationController.signal
                     }
                 );
                 const data = await this.responseData(response);
@@ -1235,11 +1371,25 @@ createApp({
                 this.detailedExplanation = data;
                 this.detailedExplanationsBySet[questionSetId] = data;
                 this.selectedSentencesBySet[questionSetId] = sentence;
+                this.detailConfirmationOpen = false;
+                this.pendingQuestionSetId = '';
+                this.pendingSentence = '';
+                this.detailedExplanationRequestId = '';
+                this.detailModalOpen = true;
             } catch (error) {
+                if (
+                    (error && error.name === 'AbortError')
+                    || this.detailedExplanationCancelling
+                ) {
+                    return;
+                }
                 this.detailedExplanationError = this.clientErrorMessage(error, '詳細説明の生成に失敗しました。');
                 this.selectedSentence = '';
             } finally {
-                this.detailedExplanationLoading = false;
+                if (!this.detailedExplanationCancelling) {
+                    this.detailedExplanationLoading = false;
+                    this.detailedExplanationController = null;
+                }
             }
         },
         isDetailedExplanationUsed(questionSetId) {
@@ -1248,6 +1398,7 @@ createApp({
         selectedSentenceFor(questionSetId) {
             return this.selectedSentencesBySet[questionSetId] || '';
         },
+        // ===== 通常モードの問題生成API =====
         async generateQuestionSet() {
             this.stopTimer();
             this.stopNormalTimer();
@@ -1297,6 +1448,7 @@ createApp({
                 this.loading = false;
             }
         },
+        // ===== タイムアタックの開始と問題取得 =====
         async startTimeAttack() {
             this.stopTimer();
             this.stopNormalTimer();
@@ -1383,6 +1535,7 @@ createApp({
                 this.generateQuestionSet();
             }
         },
+        // ===== タイムアタックと通常学習のタイマー =====
         startTimer() {
             this.stopTimer();
             this.timerId = setInterval(() => {
@@ -1473,6 +1626,7 @@ createApp({
                 this.submitting = false;
             }
         },
+        // ===== タイムアタックの終了・採点・復習データ取得 =====
         async finishTimeAttack() {
             if (this.timeAttackFinished || !this.timeAttackId || !this.questionSet) {
                 return;
@@ -1532,6 +1686,7 @@ createApp({
                 `time_attack:${result.time_attack_id}`
             );
         },
+        // ===== 通常モードの回答提出と採点 =====
         async submitAnswers() {
             const allAnswered = this.questionSet.questions.every(
                 item => this.answers[item.question_id] !== undefined
